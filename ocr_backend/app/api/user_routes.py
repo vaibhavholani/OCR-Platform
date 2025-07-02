@@ -84,4 +84,17 @@ def get_user_templates(user_id):
     return jsonify({
         'templates': [template.to_dict() for template in templates],
         'count': len(templates)
-    }) 
+    })
+
+@bp.route('/login', methods=['POST'])
+def login_user():
+    data = request.get_json()
+    if not data or not all(k in data for k in ('email', 'password')):
+        return jsonify({'error': 'Missing required fields'}), 400
+
+    user = User.query.filter_by(email=data['email']).first()
+    if user and user.check_password(data['password']):
+        user_dict = user.to_dict()
+        user_dict.pop('password', None)  # Don't send password/hash
+        return jsonify({'user': user_dict}), 200
+    return jsonify({'error': 'Invalid credentials'}), 401 

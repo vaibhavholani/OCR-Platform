@@ -104,6 +104,11 @@ const KeyValueExtraction = ({
   // Initialize selected template fields
   useEffect(() => {
     setSelectedTemplateFields(getTemplateFields());
+    // Inject mock data when template changes
+    setExtractedData((prev) => ({
+      ...prev,
+      ...getMockDataForTemplate(document.templateType),
+    }));
   }, [document.templateType]);
 
   const saveCustomTemplate = (templateFields: string[]) => {
@@ -250,6 +255,41 @@ const KeyValueExtraction = ({
       field.charAt(0).toUpperCase() + field.slice(1).replace(/([A-Z])/g, " $1")
     );
   };
+
+  // Add this function to provide mock data for each template
+  function getMockDataForTemplate(templateType: string) {
+    switch (templateType) {
+      case "register-basic":
+        return {
+          supplier: "Acme Corp",
+          party: "John Doe",
+          billNumber: "BILL-1234",
+          registerDate: "2024-07-01",
+          amount: "1500.00",
+        };
+      case "register-gst":
+        return {
+          supplier: "GST Supplies Ltd",
+          party: "Jane Smith",
+          billNumber: "GST-5678",
+          registerDate: "2024-07-02",
+          amount: "2000.00",
+          gstPercentage: "18%",
+        };
+      case "invoice-standard":
+        return {
+          invoiceNumber: "INV-2024-001",
+          vendorName: "Vendor X",
+          invoiceDate: "2024-07-03",
+          dueDate: "2024-08-03",
+          totalAmount: "2500.00",
+          subtotal: "2100.00",
+          taxAmount: "400.00",
+        };
+      default:
+        return {};
+    }
+  }
 
   return (
     <div className="max-w-7xl mx-auto relative">

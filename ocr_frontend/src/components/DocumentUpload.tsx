@@ -11,6 +11,29 @@ interface DocumentUploadProps {
   onDocumentUpload: (document: Document) => void;
 }
 
+function mapBackendToFrontendDocument(backendDoc: any, file?: File): Document {
+  return {
+    id: backendDoc.doc_id?.toString() || "",
+    name: backendDoc.original_filename,
+    type: file?.type || "",
+    uploadDate: backendDoc.created_at || new Date().toISOString(),
+    status: backendDoc.status || "pending",
+    ocrData: {
+      invoice_number: "",
+      vendor_name: "",
+      invoice_date: "",
+      due_date: "",
+      total_amount: "",
+      subtotal: "",
+      tax_amount: "",
+      line_items: [],
+    },
+    templateType: "",
+    file: file,
+    preview: backendDoc.file_path,
+  };
+}
+
 const DocumentUpload = ({ onBack, onDocumentUpload }: DocumentUploadProps) => {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [isUploading, setIsUploading] = useState(false);
@@ -27,38 +50,34 @@ const DocumentUpload = ({ onBack, onDocumentUpload }: DocumentUploadProps) => {
 
     setIsUploading(true);
 
-    // Simulate upload and OCR processing
-    setTimeout(() => {
-      const mockDocument: Document = {
-        id: Date.now().toString(),
-        name: selectedFile.name,
-        type: selectedFile.type,
-        uploadDate: new Date().toISOString(),
-        status: "reviewing",
-        ocrData: {
-          invoice_number: "INV-2024-001",
-          vendor_name: "Sample Vendor Corp",
-          invoice_date: "2024-01-15",
-          due_date: "2024-02-15",
-          total_amount: "1250.00",
-          subtotal: "1000.00",
-          tax_amount: "250.00",
-          line_items: [
-            {
-              description: "Professional Services",
-              quantity: 1,
-              unit_price: "1000.00",
-              total: "1000.00",
-            },
-          ],
-        },
-        templateType: "register-basic",
-        file: selectedFile,
-      };
-
-      onDocumentUpload(mockDocument);
+    const userId = localStorage.getItem("user_id");
+    if (!userId) {
+      alert("User not logged in");
       setIsUploading(false);
-    }, 2000);
+      return;
+    }
+
+    // For demo: simulate file upload by just using the file name as file_path
+    const postData = {
+      user_id: Number(userId),
+      file_path: `/uploads/${selectedFile.name}`,
+      original_filename: selectedFile.name,
+    };
+
+    try {
+      const res = await fetch("http://localhost:5000/api/documents/", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(postData),
+      });
+      if (!res.ok) throw new Error("Failed to upload document");
+      const data = await res.json();
+      onDocumentUpload(mapBackendToFrontendDocument(data, selectedFile));
+    } catch (err) {
+      alert("Error uploading document");
+    } finally {
+      setIsUploading(false);
+    }
   };
 
   return (

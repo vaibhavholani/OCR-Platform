@@ -5,7 +5,7 @@ class ExportFile(db.Model):
     __tablename__ = 'export_files'
     
     export_file_id = db.Column(db.Integer, primary_key=True)
-    document_id = db.Column(db.Integer, db.ForeignKey('documents.ocr_id'), nullable=False)
+    document_id = db.Column(db.Integer, db.ForeignKey('documents.doc_id'), nullable=False)
     exp_id = db.Column(db.Integer, db.ForeignKey('exports.exp_id'), nullable=False)
     file_path = db.Column(db.String(500), nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)

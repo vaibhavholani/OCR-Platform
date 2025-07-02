@@ -134,7 +134,7 @@ def seed_database():
             for field in template_fields:
                 if field.template_id == doc.user_id:  # Simple mapping
                     ocr_data.append(OCRData(
-                        document_id=doc.ocr_id,
+                        document_id=doc.doc_id,
                         field_id=field.field_id,
                         predicted_value=f"Sample {field.field_name.value}",
                         actual_value=f"Actual {field.field_name.value}",
@@ -146,7 +146,7 @@ def seed_database():
         
         # Create line items for invoice
         line_item = OCRLineItem(
-            document_id=doc1.ocr_id,
+            document_id=doc1.doc_id,
             field_id=table_field.field_id,
             row_index=1
         )
@@ -174,7 +174,7 @@ def seed_database():
         
         # Create export file
         export_file = ExportFile(
-            document_id=doc1.ocr_id,
+            document_id=doc1.doc_id,
             exp_id=export.exp_id,
             file_path="/exports/invoice_001_export.pdf"
         )

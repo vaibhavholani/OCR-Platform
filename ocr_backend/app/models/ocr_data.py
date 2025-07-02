@@ -5,7 +5,7 @@ class OCRData(db.Model):
     __tablename__ = 'ocr_data'
     
     ocr_id = db.Column(db.Integer, primary_key=True)
-    document_id = db.Column(db.Integer, db.ForeignKey('documents.ocr_id'), nullable=False)
+    document_id = db.Column(db.Integer, db.ForeignKey('documents.doc_id'), nullable=False)
     field_id = db.Column(db.Integer, db.ForeignKey('template_fields.field_id'), nullable=False)
     predicted_value = db.Column(db.Text)
     actual_value = db.Column(db.Text)

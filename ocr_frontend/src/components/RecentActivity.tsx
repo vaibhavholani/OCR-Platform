@@ -1,56 +1,42 @@
-
+import { useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { FileText, Upload, Search } from "lucide-react";
+import { UserDocument } from "@/types/document";
 
 const RecentActivity = () => {
-  const activities = [
-    {
-      id: 1,
-      type: "upload",
-      title: "Invoice_ABC_2024.pdf",
-      description: "Uploaded and processed successfully",
-      time: "2 minutes ago",
-      status: "completed",
-      icon: Upload
-    },
-    {
-      id: 2,
-      type: "review",
-      title: "Utility_Bill_March.pdf",
-      description: "Requires manual verification",
-      time: "15 minutes ago",
-      status: "pending",
-      icon: Search
-    },
-    {
-      id: 3,
-      type: "processed",
-      title: "Vendor_XYZ_Invoice.pdf",
-      description: "Data extracted and exported",
-      time: "1 hour ago",
-      status: "completed",
-      icon: FileText
-    },
-    {
-      id: 4,
-      type: "upload",
-      title: "Service_Invoice_2024.pdf",
-      description: "Processing OCR extraction",
-      time: "2 hours ago",
-      status: "processing",
-      icon: Upload
-    }
-  ];
+  const [documents, setDocuments] = useState<UserDocument[]>([]);
+
+  useEffect(() => {
+    const userId = localStorage.getItem("user_id");
+    if (!userId) return;
+    fetch(`http://localhost:5000/api/users/${userId}/documents`)
+      .then((res) => res.json())
+      .then((data) => {
+        setDocuments(data.documents || []);
+      });
+  }, []);
 
   const getStatusBadge = (status: string) => {
     switch (status) {
-      case "completed":
-        return <Badge variant="default" className="bg-green-100 text-green-800">Completed</Badge>;
+      case "processed":
+        return (
+          <Badge variant="default" className="bg-green-100 text-green-800">
+            Processed
+          </Badge>
+        );
       case "pending":
-        return <Badge variant="secondary" className="bg-yellow-100 text-yellow-800">Pending</Badge>;
+        return (
+          <Badge variant="secondary" className="bg-yellow-100 text-yellow-800">
+            Pending
+          </Badge>
+        );
       case "processing":
-        return <Badge variant="outline" className="bg-blue-100 text-blue-800">Processing</Badge>;
+        return (
+          <Badge variant="outline" className="bg-blue-100 text-blue-800">
+            Processing
+          </Badge>
+        );
       default:
         return <Badge variant="outline">{status}</Badge>;
     }
@@ -63,23 +49,36 @@ const RecentActivity = () => {
       </CardHeader>
       <CardContent>
         <div className="space-y-4">
-          {activities.map((activity) => (
-            <div key={activity.id} className="flex items-start space-x-4 p-3 rounded-lg hover:bg-accent/50 transition-colors">
-              <div className="flex-shrink-0">
-                <activity.icon className="h-5 w-5 text-muted-foreground" />
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center justify-between">
-                  <p className="text-sm font-medium text-foreground truncate">
-                    {activity.title}
-                  </p>
-                  {getStatusBadge(activity.status)}
-                </div>
-                <p className="text-sm text-muted-foreground">{activity.description}</p>
-                <p className="text-xs text-muted-foreground mt-1">{activity.time}</p>
-              </div>
+          {documents.length === 0 ? (
+            <div className="text-center py-8 text-muted-foreground">
+              No recent activity.
             </div>
-          ))}
+          ) : (
+            documents.slice(0, 5).map((doc) => (
+              <div
+                key={doc.doc_id}
+                className="flex items-start space-x-4 p-3 rounded-lg hover:bg-accent/50 transition-colors"
+              >
+                <div className="flex-shrink-0">
+                  <FileText className="h-5 w-5 text-muted-foreground" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center justify-between">
+                    <p className="text-sm font-medium text-foreground truncate">
+                      {doc.original_filename}
+                    </p>
+                    {getStatusBadge(doc.status)}
+                  </div>
+                  <p className="text-sm text-muted-foreground">
+                    {doc.file_path}
+                  </p>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Uploaded: {new Date(doc.created_at).toLocaleString()}
+                  </p>
+                </div>
+              </div>
+            ))
+          )}
         </div>
       </CardContent>
     </Card>

@@ -5,7 +5,7 @@ from ..utils.enums import DocumentStatus
 class Document(db.Model):
     __tablename__ = 'documents'
     
-    ocr_id = db.Column(db.Integer, primary_key=True)
+    doc_id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('users.user_id'), nullable=False)
     file_path = db.Column(db.String(500), nullable=False)
     original_filename = db.Column(db.String(255), nullable=False)
@@ -21,7 +21,7 @@ class Document(db.Model):
     
     def to_dict(self):
         return {
-            'ocr_id': self.ocr_id,
+            'doc_id': self.doc_id,
             'user_id': self.user_id,
             'file_path': self.file_path,
             'original_filename': self.original_filename,

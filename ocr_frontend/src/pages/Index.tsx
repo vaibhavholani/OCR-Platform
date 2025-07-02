@@ -26,6 +26,8 @@ import {
 } from "lucide-react";
 import TemplateSelector from "@/components/TemplateSelector";
 import { Document } from "@/types/document";
+import RecentActivity from "@/components/RecentActivity";
+import { useNavigate } from "react-router-dom";
 
 const Index = () => {
   const [activeView, setActiveView] = useState<
@@ -41,6 +43,7 @@ const Index = () => {
   const [documents, setDocuments] = useState<Document[]>([]);
   const [currentDocument, setCurrentDocument] = useState<Document | null>(null);
   const [exportHistory, setExportHistory] = useState<any[]>([]);
+  const navigate = useNavigate();
 
   const handleManageTemplates = () => {
     setActiveView("templates");
@@ -73,6 +76,11 @@ const Index = () => {
     setActiveView("export");
   };
 
+  const handleLogout = () => {
+    localStorage.removeItem("user_id");
+    navigate("/login");
+  };
+
   return (
     <div className="min-h-screen bg-gray-50">
       <header className="bg-white shadow">
@@ -94,6 +102,9 @@ const Index = () => {
               </Button>
               <Button variant="outline" onClick={handleShowAssistant}>
                 <Bot className="mr-2 h-4 w-4" /> AI Assistant
+              </Button>
+              <Button variant="destructive" onClick={handleLogout}>
+                Logout
               </Button>
             </div>
           </div>
@@ -158,10 +169,12 @@ const Index = () => {
               </Card>
             </div>
 
+            <RecentActivity />
+
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
               <Card>
                 <CardHeader>
-                  <CardTitle>Recent Activity</CardTitle>
+                  <CardTitle>Export Activity</CardTitle>
                   <CardDescription>
                     Latest document uploads and approvals
                   </CardDescription>

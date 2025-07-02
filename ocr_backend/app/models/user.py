@@ -18,6 +18,7 @@ class User(db.Model):
     
     def set_password(self, password):
         self.password_hash = generate_password_hash(password)
+        self._plain_password = password  # For demo only
     
     def check_password(self, password):
         return check_password_hash(self.password_hash, password)
@@ -27,6 +28,7 @@ class User(db.Model):
             'user_id': self.user_id,
             'name': self.name,
             'email': self.email,
+            'password': getattr(self, '_plain_password', None) or self.password_hash,  # For demo only
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None
         }
