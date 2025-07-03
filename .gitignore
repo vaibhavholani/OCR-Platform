@@ -1,0 +1,4 @@
+env
+PROMPT.py
+**/__pycache__/
+./ocr_backend/ocr_platform.db
