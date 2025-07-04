@@ -1,7 +1,9 @@
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, current_app
 from .. import db
 from ..models import Document, OCRData, OCRLineItem, OCRLineItemValue, Template, TemplateField
 from ..utils.enums import DocumentStatus
+import os
+from werkzeug.utils import secure_filename
 
 bp = Blueprint('documents', __name__, url_prefix='/api/documents')
 
@@ -22,23 +24,45 @@ def get_document(document_id):
 
 @bp.route('/', methods=['POST'])
 def create_document():
-    """Create a new document"""
-    data = request.get_json()
-    
-    if not data or not all(k in data for k in ('user_id', 'file_path', 'original_filename')):
-        return jsonify({'error': 'Missing required fields'}), 400
-    
-    document = Document(
-        user_id=data['user_id'],
-        file_path=data['file_path'],
-        original_filename=data['original_filename'],
-        status=DocumentStatus.PENDING
-    )
-    
-    db.session.add(document)
-    db.session.commit()
-    
-    return jsonify(document.to_dict()), 201
+    """Create a new document (supports file upload via multipart/form-data or JSON)"""
+    if request.content_type and request.content_type.startswith('multipart/form-data'):
+        # Handle file upload
+        if 'file' not in request.files or 'user_id' not in request.form:
+            return jsonify({'error': 'Missing required fields (file, user_id)'}), 400
+        file = request.files['file']
+        user_id = request.form['user_id']
+        if file.filename == '':
+            return jsonify({'error': 'No selected file'}), 400
+        filename = secure_filename(file.filename)
+        upload_folder = current_app.config.get('UPLOAD_FOLDER')
+        if not os.path.exists(upload_folder):
+            os.makedirs(upload_folder)
+        file_path = os.path.join(upload_folder, filename)
+        file.save(file_path)
+        rel_file_path = os.path.relpath(file_path, start=current_app.config['BASE_DIR'])
+        document = Document(
+            user_id=user_id,
+            file_path=rel_file_path,
+            original_filename=filename,
+            status=DocumentStatus.PENDING
+        )
+        db.session.add(document)
+        db.session.commit()
+        return jsonify(document.to_dict()), 201
+    else:
+        # Fallback to old JSON-based logic
+        data = request.get_json()
+        if not data or not all(k in data for k in ('user_id', 'file_path', 'original_filename')):
+            return jsonify({'error': 'Missing required fields'}), 400
+        document = Document(
+            user_id=data['user_id'],
+            file_path=data['file_path'],
+            original_filename=data['original_filename'],
+            status=DocumentStatus.PENDING
+        )
+        db.session.add(document)
+        db.session.commit()
+        return jsonify(document.to_dict()), 201
 
 @bp.route('/<int:document_id>', methods=['PUT'])
 def update_document(document_id):
