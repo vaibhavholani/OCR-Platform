@@ -5,3 +5,5 @@ PROMPT.py
 **/*.db
 **/uploads/
 settings.json
+.env
+.vscode 
