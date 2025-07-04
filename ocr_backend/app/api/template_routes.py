@@ -84,10 +84,10 @@ def create_template_field(template_id):
         return jsonify({'error': 'Missing required fields'}), 400
     
     try:
-        field_name = FieldName(data['field_name'])
-        field_type = FieldType(data['field_type'])
-    except ValueError:
-        return jsonify({'error': 'Invalid field name or type'}), 400
+        field_name = FieldName(data['field_name'].lower())
+        field_type = FieldType(data['field_type'].lower())
+    except ValueError as e:
+        return jsonify({'error': f'Invalid field name or type: {str(e)}'}), 400
     
     field = TemplateField(
         template_id=template_id,
@@ -114,14 +114,17 @@ def update_template_field(field_id):
     field = TemplateField.query.get_or_404(field_id)
     data = request.get_json()
     
-    if 'field_name' in data:
-        field.field_name = FieldName(data['field_name'])
-    if 'field_order' in data:
-        field.field_order = data['field_order']
-    if 'field_type' in data:
-        field.field_type = FieldType(data['field_type'])
-    if 'ai_instructions' in data:
-        field.ai_instructions = data['ai_instructions']
+    try:
+        if 'field_name' in data:
+            field.field_name = FieldName(data['field_name'].lower())
+        if 'field_order' in data:
+            field.field_order = data['field_order']
+        if 'field_type' in data:
+            field.field_type = FieldType(data['field_type'].lower())
+        if 'ai_instructions' in data:
+            field.ai_instructions = data['ai_instructions']
+    except ValueError as e:
+        return jsonify({'error': f'Invalid field name or type: {str(e)}'}), 400
     
     db.session.commit()
     return jsonify(field.to_dict())
@@ -154,10 +157,10 @@ def create_sub_template_field(field_id):
         return jsonify({'error': 'Missing required fields'}), 400
     
     try:
-        field_name = FieldName(data['field_name'])
-        data_type = DataType(data['data_type'])
-    except ValueError:
-        return jsonify({'error': 'Invalid field name or data type'}), 400
+        field_name = FieldName(data['field_name'].lower())
+        data_type = DataType(data['data_type'].lower())
+    except ValueError as e:
+        return jsonify({'error': f'Invalid field name or data type: {str(e)}'}), 400
     
     sub_field = SubTemplateField(
         field_id=field_id,

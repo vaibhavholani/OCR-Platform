@@ -10,7 +10,7 @@ def get_exports():
     """Get all exports"""
     exports = Export.query.all()
     return jsonify({
-        'exports': [exp.to_dict() for exp in exports],
+        'exports': [export.to_dict() for export in exports],
         'count': len(exports)
     })
 
@@ -25,15 +25,21 @@ def create_export():
     """Create a new export"""
     data = request.get_json()
     
-    if not data or 'format' not in data:
+    if not data or not all(k in data for k in ('user_id', 'document_id', 'format')):
         return jsonify({'error': 'Missing required fields'}), 400
     
     try:
-        export_format = ExportFormat(data['format'])
-    except ValueError:
-        return jsonify({'error': 'Invalid export format'}), 400
+        export_format = ExportFormat(data['format'].lower())
+    except ValueError as e:
+        return jsonify({'error': f'Invalid export format: {str(e)}'}), 400
     
-    export = Export(format=export_format)
+    export = Export(
+        user_id=data['user_id'],
+        document_id=data['document_id'],
+        format=export_format,
+        filename=data.get('filename'),
+        file_path=data.get('file_path')
+    )
     
     db.session.add(export)
     db.session.commit()

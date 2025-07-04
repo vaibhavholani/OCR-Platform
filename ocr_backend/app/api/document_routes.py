@@ -12,7 +12,7 @@ def get_documents():
     """Get all documents"""
     documents = Document.query.all()
     return jsonify({
-        'documents': [doc.to_dict() for doc in documents],
+        'documents': [document.to_dict() for document in documents],
         'count': len(documents)
     })
 
@@ -70,12 +70,15 @@ def update_document(document_id):
     document = Document.query.get_or_404(document_id)
     data = request.get_json()
     
-    if 'status' in data:
-        document.status = DocumentStatus(data['status'])
-    if 'file_path' in data:
-        document.file_path = data['file_path']
-    if 'original_filename' in data:
-        document.original_filename = data['original_filename']
+    try:
+        if 'status' in data:
+            document.status = DocumentStatus(data['status'].lower())
+        if 'filename' in data:
+            document.filename = data['filename']
+        if 'file_path' in data:
+            document.file_path = data['file_path']
+    except ValueError as e:
+        return jsonify({'error': f'Invalid status: {str(e)}'}), 400
     
     db.session.commit()
     return jsonify(document.to_dict())

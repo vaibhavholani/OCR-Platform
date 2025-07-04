@@ -13,6 +13,7 @@ class FieldType(Enum):
     NUMBER = "number"
     DATE = "date"
     EMAIL = "email"
+    CURRENCY = "currency"
 
 class DataType(Enum):
     STRING = "string"
