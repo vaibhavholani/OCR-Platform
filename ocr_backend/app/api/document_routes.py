@@ -10,7 +10,7 @@ def get_documents():
     """Get all documents"""
     documents = Document.query.all()
     return jsonify({
-        'documents': [doc.to_dict() for doc in documents],
+        'documents': [document.to_dict() for document in documents],
         'count': len(documents)
     })
 
@@ -25,14 +25,13 @@ def create_document():
     """Create a new document"""
     data = request.get_json()
     
-    if not data or not all(k in data for k in ('user_id', 'file_path', 'original_filename')):
+    if not data or not all(k in data for k in ('user_id', 'filename')):
         return jsonify({'error': 'Missing required fields'}), 400
     
     document = Document(
         user_id=data['user_id'],
-        file_path=data['file_path'],
-        original_filename=data['original_filename'],
-        status=DocumentStatus.PENDING
+        filename=data['filename'],
+        file_path=data.get('file_path')
     )
     
     db.session.add(document)
@@ -46,12 +45,15 @@ def update_document(document_id):
     document = Document.query.get_or_404(document_id)
     data = request.get_json()
     
-    if 'status' in data:
-        document.status = DocumentStatus(data['status'])
-    if 'file_path' in data:
-        document.file_path = data['file_path']
-    if 'original_filename' in data:
-        document.original_filename = data['original_filename']
+    try:
+        if 'status' in data:
+            document.status = DocumentStatus(data['status'].lower())
+        if 'filename' in data:
+            document.filename = data['filename']
+        if 'file_path' in data:
+            document.file_path = data['file_path']
+    except ValueError as e:
+        return jsonify({'error': f'Invalid status: {str(e)}'}), 400
     
     db.session.commit()
     return jsonify(document.to_dict())
