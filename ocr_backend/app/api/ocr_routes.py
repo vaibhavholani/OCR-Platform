@@ -1,6 +1,8 @@
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, current_app
 from .. import db
-from ..models import OCRData, OCRLineItem, OCRLineItemValue
+from ..models import OCRData, OCRLineItem, OCRLineItemValue, Document, TemplateField
+from ..utils.gemini_ocr import call_gemini_ocr, parse_gemini_response
+import os
 
 bp = Blueprint('ocr', __name__, url_prefix='/api/ocr')
 
@@ -178,4 +180,35 @@ def delete_line_item_value(value_id):
     value = OCRLineItemValue.query.get_or_404(value_id)
     db.session.delete(value)
     db.session.commit()
-    return jsonify({'message': 'Line item value deleted successfully'}) 
+    return jsonify({'message': 'Line item value deleted successfully'})
+
+@bp.route('/extract_fields', methods=['POST'])
+def extract_fields():
+    print("DB URI:", current_app.config['SQLALCHEMY_DATABASE_URI'])
+    data = request.get_json()
+    doc_id = data.get('doc_id')
+    template_id = data.get('template_id')
+
+    print("doc_id received:", doc_id)
+    doc = Document.query.get(doc_id)
+    print("Document found:", doc is not None)
+    if doc:
+        print("file_path from DB:", doc.file_path)
+        print("Absolute file path:", os.path.abspath(doc.file_path))
+        print("File exists:", os.path.exists(doc.file_path))
+
+    if not doc:
+        return jsonify({'error': 'Document not found'}), 404
+
+    # 2. Fetch field names
+    fields = TemplateField.query.filter_by(template_id=template_id).all()
+    field_names = [f.field_name.value for f in fields]
+
+    # 3. Call Gemini API
+    image_path = doc.file_path
+    gemini_response = call_gemini_ocr(image_path, field_names)
+
+    # 4. Parse response
+    extracted = parse_gemini_response(gemini_response, field_names)
+
+    return jsonify({'fields': extracted}) 
