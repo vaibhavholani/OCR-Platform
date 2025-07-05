@@ -25,7 +25,6 @@ class NameMatcher:
 
         self.llm = ChatOpenAI(
             model="gpt-3.5-turbo",  # Using 3.5 for cost efficiency
-            openai_api_key=api_key,
             temperature=0
         )
         

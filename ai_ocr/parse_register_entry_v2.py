@@ -49,12 +49,12 @@ class InvoiceParser:
         if not api_key:
             raise ValueError("OPENAI_API_KEY environment variable is required")
 
+        # Initialize with minimal parameters to avoid proxies error
         self.llm = ChatOpenAI(
-            model="gpt-4o-mini",
-            openai_api_key=api_key,
-            max_tokens=300,
+            model="gpt-4o-mini",  # Use GPT-4o-mini which supports image processing
             temperature=0
         )
+
         
         self.output_parser = PydanticOutputParser(pydantic_object=InvoiceData)
         self.prompt = self._create_prompt()
