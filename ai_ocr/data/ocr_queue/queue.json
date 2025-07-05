@@ -1,0 +1,81 @@
+{
+  "entries": [
+    {
+      "id": "713d4b94-99ce-443a-93c4-b615630f50f8",
+      "image_path": "D:\\Assessment\\OCR Platform\\ai_ocr\\data\\ocr_queue\\images\\713d4b94-99ce-443a-93c4-b615630f50f8.jpg",
+      "ocr_data": {
+        "supplier_name": "Test Supplier",
+        "amount": 1000,
+        "date": "2024-01-01"
+      },
+      "status": "processed",
+      "upload_time": "2025-07-05T12:52:23.823639",
+      "processed_time": "2025-07-05T12:52:23.826644"
+    },
+    {
+      "id": "a7d94e9a-373c-403f-bb79-43af66b8e8dc",
+      "image_path": "D:\\Assessment\\OCR Platform\\ai_ocr\\data\\ocr_queue\\images\\a7d94e9a-373c-403f-bb79-43af66b8e8dc.jpg",
+      "ocr_data": {
+        "supplier_name": "Test Supplier",
+        "amount": 1000,
+        "date": "2024-01-01"
+      },
+      "status": "processed",
+      "upload_time": "2025-07-05T12:53:44.910546",
+      "processed_time": "2025-07-05T12:53:44.912528"
+    },
+    {
+      "id": "a8abf60a-db59-4f02-8d90-9a8f1adb9370",
+      "image_path": "D:\\Assessment\\OCR Platform\\ai_ocr\\data\\ocr_queue\\images\\a8abf60a-db59-4f02-8d90-9a8f1adb9370.jpg",
+      "ocr_data": {
+        "supplier_name": "Test Supplier",
+        "amount": 1000,
+        "date": "2024-01-01"
+      },
+      "status": "processed",
+      "upload_time": "2025-07-05T13:09:35.093676",
+      "processed_time": "2025-07-05T13:09:35.094679"
+    },
+    {
+      "id": "5e84b010-3cf1-4aef-82a6-b50c574a5ac5",
+      "image_path": "D:\\Assessment\\OCR Platform\\ai_ocr\\data\\ocr_queue\\images\\5e84b010-3cf1-4aef-82a6-b50c574a5ac5.jpg",
+      "ocr_data": {
+        "supplier_name": "Test Supplier",
+        "amount": 1000,
+        "date": "2024-01-01"
+      },
+      "status": "processed",
+      "upload_time": "2025-07-05T13:14:05.125613",
+      "processed_time": "2025-07-05T13:14:05.125613"
+    },
+    {
+      "id": "487c72bd-e696-42fb-9654-26dc28bf80b9",
+      "image_path": "D:\\Assessment\\OCR Platform\\ai_ocr\\data\\ocr_queue\\images\\487c72bd-e696-42fb-9654-26dc28bf80b9.jpg",
+      "ocr_data": {
+        "supplier_name": "Test Supplier",
+        "amount": 1000,
+        "date": "2024-01-01"
+      },
+      "status": "processed",
+      "upload_time": "2025-07-05T13:21:09.897571",
+      "processed_time": "2025-07-05T13:21:09.897571"
+    },
+    {
+      "id": "f5b09b9e-f359-4721-97b6-d65cf13242ef",
+      "image_path": "D:\\Assessment\\OCR Platform\\ai_ocr\\data\\ocr_queue\\images\\f5b09b9e-f359-4721-97b6-d65cf13242ef.jpg",
+      "ocr_data": {
+        "supplier_name": "Test Supplier",
+        "amount": 1000,
+        "date": "2024-01-01"
+      },
+      "status": "processed",
+      "upload_time": "2025-07-05T13:21:44.601098",
+      "processed_time": "2025-07-05T13:21:44.602099"
+    }
+  ],
+  "stats": {
+    "total_processed": 6,
+    "total_pending": 0,
+    "last_processed": "2025-07-05T13:21:44.603097"
+  }
+}

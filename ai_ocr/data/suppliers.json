@@ -1,0 +1,27 @@
+[
+  {
+    "id": 1,
+    "name": "Rachit Fashion",
+    "type": "supplier"
+  },
+  {
+    "id": 2,
+    "name": "ABC Textiles",
+    "type": "supplier"
+  },
+  {
+    "id": 3,
+    "name": "XYZ Fabrics",
+    "type": "supplier"
+  },
+  {
+    "id": 4,
+    "name": "Fashion House Ltd",
+    "type": "supplier"
+  },
+  {
+    "id": 5,
+    "name": "Textile World",
+    "type": "supplier"
+  }
+]

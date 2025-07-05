@@ -1,0 +1,27 @@
+[
+  {
+    "id": 1,
+    "name": "Retail Store A",
+    "type": "party"
+  },
+  {
+    "id": 2,
+    "name": "Fashion Boutique",
+    "type": "party"
+  },
+  {
+    "id": 3,
+    "name": "Department Store",
+    "type": "party"
+  },
+  {
+    "id": 4,
+    "name": "Online Retailer",
+    "type": "party"
+  },
+  {
+    "id": 5,
+    "name": "Wholesale Buyer",
+    "type": "party"
+  }
+]
