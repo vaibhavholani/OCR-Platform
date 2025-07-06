@@ -4,6 +4,7 @@ PROMPT.py
 **/__pycache__/
 **/*.db
 **/uploads/
+**/*.log
 settings.json
 .env
 .vscode 
