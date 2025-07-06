@@ -1,224 +1,216 @@
 # OCR Platform Backend
 
-A Flask-based backend API for an OCR (Optical Character Recognition) platform that handles document processing, template management, and data extraction.
+A customizable and flexible OCR (Optical Character Recognition) platform that processes documents using AI-powered field extraction based on configurable templates.
 
 ## 🚀 Features
 
-- **User Management**: Authentication and user profiles
-- **Document Processing**: Upload and process documents with OCR
-- **Template System**: Create custom extraction templates with AI instructions
-- **Data Extraction**: Extract structured data from documents
-- **Export System**: Export processed data in multiple formats
-- **RESTful API**: Complete CRUD operations for all entities
+- **Document Upload & Management**: Upload documents with automatic file handling
+- **Template-Based OCR**: Define custom templates with specific fields to extract
+- **AI-Powered Extraction**: Uses Google Gemini for intelligent field extraction
+- **Integrated Pipeline**: Seamless document → template → OCR → database storage flow
+- **Status Tracking**: Real-time processing status updates
+- **Multi-format Support**: Handle text fields, tables, dates, currencies, etc.
+- **Auto-processing**: Optional automatic OCR processing on upload
+- **Reprocessing**: Re-run OCR with different templates
+- **Export Capabilities**: Export extracted data in multiple formats
 
-## 📋 Prerequisites
+## 📋 Pipeline Flow
 
+```
+Document Upload → Template Selection → OCR Processing → Database Storage → Results
+```
+
+### Detailed Flow:
+1. **Document Upload** (`POST /api/documents/`)
+   - Upload file with optional template_id and auto_process flag
+   - Document saved to filesystem and database with PENDING status
+
+2. **OCR Processing** (`POST /api/ocr/process_document`)
+   - Document status updated to PROCESSING
+   - Template fields retrieved
+   - Gemini AI processes document based on field types
+   - Results saved to OCRData and OCRLineItem tables
+   - Document status updated to PROCESSED or FAILED
+
+3. **Results Retrieval** (`GET /api/documents/{id}/ocr-results`)
+   - Formatted extraction results with field mappings
+   - Confidence scores and timestamps
+
+## 🛠️ Installation & Setup
+
+### Prerequisites
 - Python 3.8+
-- pip (Python package manager)
+- Google Gemini API key
 
-## 🛠️ Installation
-
-1. **Clone the repository** (if not already done):
-
-   ```bash
-   cd ocr_backend
-   ```
-
-2. **Install dependencies**:
-
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-3. **Initialize the database**:
-
-   ```bash
-   python seed.py
-   ```
-
-4. **Run the application**:
-   ```bash
-   python run.py
-   ```
-
-The API will be available at `http://localhost:5000`
-
-## 📊 Database Schema
-
-### Core Entities
-
-- **Users**: Authentication and user management
-- **Documents**: File uploads and processing status
-- **Templates**: OCR extraction templates
-- **Template Fields**: Individual fields within templates
-- **OCR Data**: Extracted data from documents
-- **Line Items**: Table row data for structured documents
-- **Exports**: Export sessions and files
-
-### Relationships
-
-- Users have many Documents and Templates
-- Templates have many Template Fields
-- Documents have many OCR Data and Line Items
-- Template Fields can have Sub Fields and Field Options
-
-## 🔌 API Endpoints
-
-### Users (`/api/users`)
-
-| Method | Endpoint                    | Description          |
-| ------ | --------------------------- | -------------------- |
-| GET    | `/api/users/`               | Get all users        |
-| GET    | `/api/users/<id>`           | Get specific user    |
-| POST   | `/api/users/`               | Create new user      |
-| PUT    | `/api/users/<id>`           | Update user          |
-| DELETE | `/api/users/<id>`           | Delete user          |
-| GET    | `/api/users/<id>/documents` | Get user's documents |
-| GET    | `/api/users/<id>/templates` | Get user's templates |
-
-### Documents (`/api/documents`)
-
-| Method | Endpoint                         | Description             |
-| ------ | -------------------------------- | ----------------------- |
-| GET    | `/api/documents/`                | Get all documents       |
-| GET    | `/api/documents/<id>`            | Get specific document   |
-| POST   | `/api/documents/`                | Create new document     |
-| PUT    | `/api/documents/<id>`            | Update document         |
-| DELETE | `/api/documents/<id>`            | Delete document         |
-| GET    | `/api/documents/<id>/ocr-data`   | Get document OCR data   |
-| POST   | `/api/documents/<id>/ocr-data`   | Create OCR data         |
-| GET    | `/api/documents/<id>/line-items` | Get document line items |
-| POST   | `/api/documents/<id>/line-items` | Create line item        |
-
-### Exports (`/api/exports`)
-
-| Method | Endpoint                  | Description           |
-| ------ | ------------------------- | --------------------- |
-| GET    | `/api/exports/`           | Get all exports       |
-| GET    | `/api/exports/<id>`       | Get specific export   |
-| POST   | `/api/exports/`           | Create new export     |
-| DELETE | `/api/exports/<id>`       | Delete export         |
-| GET    | `/api/exports/<id>/files` | Get export files      |
-| POST   | `/api/exports/<id>/files` | Create export file    |
-| GET    | `/api/exports/formats`    | Get available formats |
-
-## 📝 Sample Data
-
-The seed script creates:
-
-- **2 Users**: John Doe and Jane Smith
-- **2 Templates**: Invoice and Receipt templates
-- **8 Template Fields**: Various field types (text, date, number, table)
-- **4 Sub Fields**: For table structure
-- **2 Documents**: Sample invoice and receipt
-- **OCR Data**: Extracted values with confidence scores
-- **Line Items**: Table row data with values
-- **1 Export**: Sample PDF export
-
-### Test Credentials
-
-- **User 1**: john@example.com / password123
-- **User 2**: jane@example.com / password123
-
-## 🔧 Configuration
-
-The application uses SQLite by default. Configuration is in `app/config.py`:
-
-- Database: SQLite (`ocr_platform.db`)
-- Upload folder: `uploads/`
-- Max file size: 16MB
-- Debug mode: Enabled
-
-## 🧪 Testing the API
-
-### Get all users:
-
+### Setup
 ```bash
-curl http://localhost:5000/api/users/
-```
+# Clone repository
+cd ocr_backend
 
-### Create a new user:
+# Install dependencies
+pip install -r requirements.txt
 
-```bash
-curl -X POST http://localhost:5000/api/users/ \
-  -H "Content-Type: application/json" \
-  -d '{"name": "Test User", "email": "test@example.com", "password": "password123"}'
-```
+# Set environment variables
+export GEMINI_API_KEY="your-gemini-api-key"
+export DATABASE_URL="sqlite:///ocr_platform.db"  # Optional
 
-### Get all documents:
+# Initialize database
+python seed.py
 
-```bash
-curl http://localhost:5000/api/documents/
-```
-
-## 📁 Project Structure
-
-```
-ocr_backend/
-├── app/
-│   ├── __init__.py              # Flask app factory
-│   ├── config.py                # Configuration settings
-│   ├── models/                  # SQLAlchemy models
-│   │   ├── __init__.py
-│   │   ├── user.py
-│   │   ├── document.py
-│   │   ├── template.py
-│   │   ├── template_field.py
-│   │   ├── sub_template_field.py
-│   │   ├── ocr_data.py
-│   │   ├── ocr_line_item.py
-│   │   ├── ocr_line_item_value.py
-│   │   ├── field_option.py
-│   │   ├── export.py
-│   │   └── export_file.py
-│   ├── api/                     # API routes
-│   │   ├── __init__.py
-│   │   ├── user_routes.py
-│   │   ├── document_routes.py
-│   │   └── export_routes.py
-│   └── utils/
-│       └── enums.py             # Enumeration classes
-├── seed.py                      # Database seeding script
-├── run.py                       # Application entry point
-├── requirements.txt             # Python dependencies
-└── README.md                    # This file
-```
-
-## 🚀 Development
-
-### Running in Development Mode
-
-```bash
+# Run application
 python run.py
 ```
 
-### Seeding the Database
+The application will start at `http://localhost:5000`
 
+## 📚 API Endpoints
+
+### Documents
+- `GET /api/documents/` - List all documents
+- `POST /api/documents/` - Upload document (supports auto-processing)
+- `GET /api/documents/{id}` - Get specific document
+- `GET /api/documents/{id}/status` - Get processing status
+- `GET /api/documents/{id}/ocr-results` - Get extraction results
+- `POST /api/documents/{id}/reprocess` - Reprocess with different template
+- `PUT /api/documents/{id}` - Update document
+- `DELETE /api/documents/{id}` - Delete document
+
+### OCR Processing
+- `POST /api/ocr/process_document` - Process document with template
+- `POST /api/ocr/extract_fields` - Legacy extraction endpoint
+- `GET /api/ocr/data` - List all OCR data
+- CRUD operations for OCR data, line items, and values
+
+### Templates
+- `GET /api/templates/` - List all templates
+- `POST /api/templates/` - Create template
+- `GET /api/templates/{id}` - Get template with fields
+- `POST /api/templates/{id}/fields` - Add fields to template
+- CRUD operations for template fields and sub-fields
+
+### Users & Exports
+- `GET /api/users/` - User management
+- `GET /api/exports/` - Export data management
+- `GET /api/enums/` - Available enum values
+
+## 🔧 Usage Examples
+
+### 1. Upload Document with Auto-Processing
 ```bash
-python seed.py
+curl -X POST http://localhost:5000/api/documents/ \
+  -F "file=@invoice.pdf" \
+  -F "user_id=1" \
+  -F "template_id=1" \
+  -F "auto_process=true"
 ```
 
-### Database Migrations
-
-The application uses Flask-Migrate for database migrations:
-
+### 2. Manual OCR Processing
 ```bash
-flask db init
-flask db migrate -m "Initial migration"
-flask db upgrade
+curl -X POST http://localhost:5000/api/ocr/process_document \
+  -H "Content-Type: application/json" \
+  -d '{"doc_id": 1, "template_id": 1}'
 ```
 
-## 🔒 Security Notes
+### 3. Get Processing Status
+```bash
+curl http://localhost:5000/api/documents/1/status
+```
 
-- Passwords are hashed using Werkzeug's security functions
-- CORS is enabled for frontend integration
-- Input validation is implemented on all endpoints
-- SQL injection protection via SQLAlchemy ORM
+### 4. Get Extraction Results
+```bash
+curl http://localhost:5000/api/documents/1/ocr-results
+```
 
-## 📞 Support
+### 5. Reprocess Document
+```bash
+curl -X POST http://localhost:5000/api/documents/1/reprocess \
+  -H "Content-Type: application/json" \
+  -d '{"template_id": 2}'
+```
 
-For issues or questions, please check the API documentation or create an issue in the repository.
+## 📊 Database Schema
 
----
+### Key Models:
+- **Document**: Stores uploaded files and processing status
+- **Template**: Defines extraction templates
+- **TemplateField**: Individual fields within templates
+- **SubTemplateField**: Sub-fields for complex structures (tables)
+- **OCRData**: Extracted field values
+- **OCRLineItem**: Table row data
+- **OCRLineItemValue**: Individual cell values in tables
 
-**Happy Coding! 🎉**
+### Field Types:
+- `TEXT`: Simple text extraction
+- `NUMBER`: Numeric values
+- `DATE`: Date fields
+- `EMAIL`: Email addresses
+- `CURRENCY`: Monetary amounts
+- `TABLE`: Tabular data
+- `SELECT`: Dropdown/choice fields
+
+### Document Status:
+- `PENDING`: Awaiting processing
+- `PROCESSING`: Currently being processed
+- `PROCESSED`: Successfully completed
+- `FAILED`: Processing failed
+
+## ⚙️ Configuration
+
+Environment variables:
+- `GEMINI_API_KEY`: Required for OCR processing
+- `DATABASE_URL`: Database connection (defaults to SQLite)
+- `LOG_LEVEL`: Logging level (INFO, DEBUG, etc.)
+- `SECRET_KEY`: Flask secret key
+
+Application settings in `config.py`:
+- Upload folder paths
+- File size limits
+- OCR confidence thresholds
+- Retry attempts
+
+## 🔍 Logging
+
+Logs are written to:
+- Console (development)
+- `logs/ocr_platform.log` (production)
+
+Log rotation with 10MB files, 10 backup files.
+
+## 🚦 Error Handling
+
+The system includes comprehensive error handling:
+- Document validation
+- Template validation
+- OCR processing errors
+- Database transaction rollbacks
+- Status tracking for failed processes
+- Detailed error messages and logging
+
+## 🔄 Status Tracking
+
+Document processing status is tracked throughout the pipeline:
+1. **PENDING** → Document uploaded, awaiting processing
+2. **PROCESSING** → OCR extraction in progress
+3. **PROCESSED** → Successfully completed with results
+4. **FAILED** → Processing failed with error details
+
+## 📈 Monitoring
+
+Check system health:
+- Document processing status
+- OCR extraction counts
+- Error rates in logs
+- Database performance
+
+## 🛣️ Roadmap
+
+- [ ] Batch processing capabilities
+- [ ] Custom confidence thresholds per field
+- [ ] Template auto-detection
+- [ ] Advanced table extraction
+- [ ] Real-time processing notifications
+- [ ] Performance metrics dashboard
+
+## 📝 License
+
+This project is licensed under the MIT License.
