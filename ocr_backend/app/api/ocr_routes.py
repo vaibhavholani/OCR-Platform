@@ -7,6 +7,43 @@ import os
 
 bp = Blueprint('ocr', __name__, url_prefix='/api/ocr')
 
+def format_table_data_for_response(table_data_results):
+    """
+    Format table data for frontend consumption
+    
+    Args:
+        table_data_results: {field_id: {field_name, field_type, sub_fields, table_data}}
+    
+    Returns:
+        Formatted dict ready for frontend
+    """
+    formatted_tables = {}
+    
+    for field_id, data in table_data_results.items():
+        field_name = data['field_name']
+        sub_fields = data['sub_fields']
+        table_data = data['table_data']
+        
+        # Format columns info
+        columns = []
+        for sub_field in sub_fields:
+            columns.append({
+                'name': sub_field.field_name.value,
+                'data_type': sub_field.data_type.value,
+                'sub_temp_field_id': sub_field.sub_temp_field_id
+            })
+        
+        # Format table
+        formatted_tables[field_name] = {
+            'field_id': field_id,
+            'field_type': 'table',
+            'columns': columns,
+            'rows': table_data['rows'],
+            'row_count': len(table_data['rows'])
+        }
+    
+    return formatted_tables
+
 @bp.route('/data', methods=['GET'])
 def get_all_ocr_data():
     """Get all OCR data"""
@@ -251,6 +288,7 @@ def process_document_internal(doc_id, template_id):
         extracted_data = {}
         ocr_data_records = []
         line_item_records = []
+        table_data_results = {} # New dictionary to store table data results
 
         # Separate fields by type
         text_fields = [f for f in template_fields if f.field_type in [FieldType.TEXT, FieldType.NUMBER, FieldType.DATE, FieldType.EMAIL, FieldType.CURRENCY]]
@@ -297,10 +335,21 @@ def process_document_internal(doc_id, template_id):
                 
                 # Check for parsing errors
                 if 'parse_error' in table_data:
+                    # log the error
+                    current_app.logger.error(f"Table parsing error: {table_data['parse_error']}")
+                    
                     continue  # Skip this table but don't fail the entire process
                 
                 # Handle table data (assuming it returns a list of rows)
                 if isinstance(table_data, dict) and 'rows' in table_data:
+                    # Store table data for response
+                    table_data_results[table_field.field_id] = {
+                        'field_name': table_field.field_name.value,
+                        'sub_fields': sub_fields,
+                        'table_data': table_data
+                    }
+                    
+                    # Store in database
                     for row_index, row_data in enumerate(table_data['rows']):
                         # Create line item
                         line_item = OCRLineItem(
@@ -338,6 +387,8 @@ def process_document_internal(doc_id, template_id):
         db.session.commit()
 
         # 12. Return success result
+        formatted_table_data = format_table_data_for_response(table_data_results)
+        
         return {
             'success': True,
             'message': 'Document processed successfully',
@@ -345,6 +396,7 @@ def process_document_internal(doc_id, template_id):
             'template_id': template_id,
             'status': doc.status.value,
             'extracted_data': extracted_data,
+            'table_data': formatted_table_data,  # Formatted table data for frontend
             'ocr_records_created': len(ocr_data_records),
             'line_items_created': len(line_item_records)
         }

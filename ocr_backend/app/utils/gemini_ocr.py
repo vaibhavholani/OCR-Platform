@@ -58,8 +58,12 @@ def parse_gemini_response(response_text, field_names):
         
         data = json.loads(cleaned_text.strip())
         
-        # If it's table data with rows structure, return as-is
-        if isinstance(data, dict) and 'rows' in data:
+        # Handle different response formats for table data
+        if isinstance(data, list):
+            # Direct array format: [{"col1": "val1", "col2": "val2"}, ...]
+            return {"rows": data}
+        elif isinstance(data, dict) and 'rows' in data:
+            # Expected format: {"rows": [{"col1": "val1", "col2": "val2"}, ...]}
             return data
             
         # For regular field extraction, ensure all requested fields are included

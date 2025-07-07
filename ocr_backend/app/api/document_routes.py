@@ -1,11 +1,65 @@
 from flask import Blueprint, jsonify, request, current_app
 from .. import db
-from ..models import Document, OCRData, OCRLineItem, OCRLineItemValue, Template, TemplateField
-from ..utils.enums import DocumentStatus
+from ..models import Document, OCRData, OCRLineItem, OCRLineItemValue, Template, TemplateField, SubTemplateField
+from ..utils.enums import DocumentStatus, FieldType
 import os
 from werkzeug.utils import secure_filename
 
 bp = Blueprint('documents', __name__, url_prefix='/api/documents')
+
+def reconstruct_table_data_from_db(document_id):
+    """
+    Reconstruct table data from stored OCRLineItem and OCRLineItemValue records
+    in the same format as the processing function
+    """
+    # Get all table fields for line items in this document
+    table_fields_query = db.session.query(TemplateField).join(
+        OCRLineItem, TemplateField.field_id == OCRLineItem.field_id
+    ).filter(
+        OCRLineItem.document_id == document_id,
+        TemplateField.field_type == FieldType.TABLE
+    ).distinct().all()
+    
+    formatted_tables = {}
+    
+    for table_field in table_fields_query:
+        # Get sub-template fields (columns)
+        sub_fields = SubTemplateField.query.filter_by(field_id=table_field.field_id).all()
+        
+        # Get line items for this table field
+        line_items = OCRLineItem.query.filter_by(
+            document_id=document_id,
+            field_id=table_field.field_id
+        ).order_by(OCRLineItem.row_index).all()
+        
+        # Reconstruct rows
+        rows = []
+        for line_item in line_items:
+            row_data = {}
+            for value in line_item.ocr_line_item_values:
+                if value.sub_template_field:
+                    row_data[value.sub_template_field.field_name.value] = value.predicted_value or value.actual_value
+            rows.append(row_data)
+        
+        # Format columns info
+        columns = []
+        for sub_field in sub_fields:
+            columns.append({
+                'name': sub_field.field_name.value,
+                'data_type': sub_field.data_type.value,
+                'sub_temp_field_id': sub_field.sub_temp_field_id
+            })
+        
+        # Add to formatted tables
+        formatted_tables[table_field.field_name.value] = {
+            'field_id': table_field.field_id,
+            'field_type': 'table',
+            'columns': columns,
+            'rows': rows,
+            'row_count': len(rows)
+        }
+    
+    return formatted_tables
 
 @bp.route('/', methods=['GET'])
 def get_documents():
@@ -242,52 +296,26 @@ def get_document_ocr_results(document_id):
     try:
         document = Document.query.get_or_404(document_id)
         
-        # Get OCR data with field information
+        # Get OCR data with field information (non-table fields)
         ocr_data = db.session.query(OCRData, TemplateField).join(
             TemplateField, OCRData.field_id == TemplateField.field_id
         ).filter(OCRData.document_id == document_id).all()
         
-        # Get line items with values
-        line_items = OCRLineItem.query.filter_by(document_id=document_id).all()
-        
-        # Format OCR data
-        formatted_ocr_data = []
+        # Format extracted data (text fields)
+        extracted_data = {}
         for ocr, field in ocr_data:
-            formatted_ocr_data.append({
-                'field_name': field.field_name.value,
-                'field_type': field.field_type.value,
-                'predicted_value': ocr.predicted_value,
-                'actual_value': ocr.actual_value,
-                'confidence': ocr.confidence,
-                'created_at': ocr.created_at.isoformat() if ocr.created_at else None
-            })
+            extracted_data[field.field_name.value] = ocr.predicted_value or ocr.actual_value
         
-        # Format line items
-        formatted_line_items = []
-        for line_item in line_items:
-            line_item_data = {
-                'row_index': line_item.row_index,
-                'field_id': line_item.field_id,
-                'values': []
-            }
-            
-            for value in line_item.ocr_line_item_values:
-                line_item_data['values'].append({
-                    'field_name': value.sub_template_field.field_name.value if value.sub_template_field else None,
-                    'predicted_value': value.predicted_value,
-                    'actual_value': value.actual_value,
-                    'confidence': value.confidence
-                })
-            
-            formatted_line_items.append(line_item_data)
+        # Get formatted table data
+        table_data = reconstruct_table_data_from_db(document_id)
         
         return jsonify({
             'document_id': document_id,
             'status': document.status.value,
             'original_filename': document.original_filename,
             'processed_at': document.processed_at.isoformat() if document.processed_at else None,
-            'ocr_data': formatted_ocr_data,
-            'line_items': formatted_line_items
+            'extracted_data': extracted_data,  # Text fields in same format as processing
+            'table_data': table_data  # Table data in same format as processing
         })
         
     except Exception as e:
