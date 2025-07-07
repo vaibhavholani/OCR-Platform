@@ -1,7 +1,8 @@
 from flask import Blueprint, jsonify, request, current_app
 from .. import db
-from ..models import OCRData, OCRLineItem, OCRLineItemValue, Document, TemplateField
+from ..models import OCRData, OCRLineItem, OCRLineItemValue, Document, TemplateField, SubTemplateField, Template
 from ..utils.gemini_ocr import call_gemini_ocr, parse_gemini_response
+from ..utils.enums import DocumentStatus, FieldType
 import os
 
 bp = Blueprint('ocr', __name__, url_prefix='/api/ocr')
@@ -212,3 +213,169 @@ def extract_fields():
     extracted = parse_gemini_response(gemini_response, field_names)
 
     return jsonify({'fields': extracted}) 
+
+def process_document_internal(doc_id, template_id):
+    """
+    Internal function for OCR processing that can be called from other modules.
+    Returns a dict with success status, message, and extracted data.
+    """
+    try:
+        # 1. Get document and validate
+        doc = Document.query.get(doc_id)
+        if not doc:
+            return {'success': False, 'message': 'Document not found'}
+
+        # 2. Get template and validate
+        template = Template.query.get(template_id)
+        if not template:
+            return {'success': False, 'message': 'Template not found'}
+
+        # 3. Update document status to PROCESSING
+        doc.status = DocumentStatus.PROCESSING
+        db.session.commit()
+
+        # 4. Check if file exists
+        if not os.path.exists(doc.file_path):
+            doc.status = DocumentStatus.FAILED
+            db.session.commit()
+            return {'success': False, 'message': 'Document file not found'}
+
+        # 5. Get template fields
+        template_fields = TemplateField.query.filter_by(template_id=template_id).all()
+        if not template_fields:
+            doc.status = DocumentStatus.FAILED
+            db.session.commit()
+            return {'success': False, 'message': 'No fields defined for this template'}
+
+        # 6. Process different field types
+        extracted_data = {}
+        ocr_data_records = []
+        line_item_records = []
+
+        # Separate fields by type
+        text_fields = [f for f in template_fields if f.field_type in [FieldType.TEXT, FieldType.NUMBER, FieldType.DATE, FieldType.EMAIL, FieldType.CURRENCY]]
+        table_fields = [f for f in template_fields if f.field_type == FieldType.TABLE]
+
+        # 7. Process text-based fields
+        if text_fields:
+            field_names = [f.field_name.value for f in text_fields]
+            
+            # Call Gemini OCR
+            gemini_response = call_gemini_ocr(doc.file_path, field_names)
+            extracted_fields = parse_gemini_response(gemini_response, field_names)
+            
+            # Check for parsing errors
+            if 'parse_error' in extracted_fields:
+                doc.status = DocumentStatus.FAILED
+                db.session.commit()
+                return {'success': False, 'message': f'OCR parsing failed: {extracted_fields["parse_error"]}'}
+            
+            # Save to OCRData table
+            for field in text_fields:
+                field_value = extracted_fields.get(field.field_name.value)
+                if field_value is not None:
+                    ocr_data = OCRData(
+                        document_id=doc_id,
+                        field_id=field.field_id,
+                        predicted_value=str(field_value),
+                        confidence=0.8  # Default confidence, can be improved
+                    )
+                    ocr_data_records.append(ocr_data)
+                    extracted_data[field.field_name.value] = field_value
+
+        # 8. Process table fields
+        for table_field in table_fields:
+            # Get sub-template fields for this table
+            sub_fields = SubTemplateField.query.filter_by(field_id=table_field.field_id).all()
+            if sub_fields:
+                sub_field_names = [sf.field_name.value for sf in sub_fields]
+                
+                # Create table-specific prompt
+                table_prompt = f"Extract table data for {table_field.field_name.value} with columns: {', '.join(sub_field_names)}"
+                table_response = call_gemini_ocr(doc.file_path, sub_field_names, custom_prompt=table_prompt)
+                table_data = parse_gemini_response(table_response, sub_field_names)
+                
+                # Check for parsing errors
+                if 'parse_error' in table_data:
+                    continue  # Skip this table but don't fail the entire process
+                
+                # Handle table data (assuming it returns a list of rows)
+                if isinstance(table_data, dict) and 'rows' in table_data:
+                    for row_index, row_data in enumerate(table_data['rows']):
+                        # Create line item
+                        line_item = OCRLineItem(
+                            document_id=doc_id,
+                            field_id=table_field.field_id,
+                            row_index=row_index
+                        )
+                        db.session.add(line_item)
+                        db.session.flush()  # Get the ID
+                        
+                        # Create line item values
+                        for sub_field in sub_fields:
+                            value = row_data.get(sub_field.field_name.value)
+                            if value is not None:
+                                line_item_value = OCRLineItemValue(
+                                    ocr_items_id=line_item.ocr_items_id,
+                                    sub_temp_field_id=sub_field.sub_temp_field_id,
+                                    predicted_value=str(value),
+                                    confidence=0.8
+                                )
+                                db.session.add(line_item_value)
+                        
+                        line_item_records.append(line_item)
+
+        # 9. Save all OCR data to database
+        for ocr_data in ocr_data_records:
+            db.session.add(ocr_data)
+
+        # 10. Update document status to PROCESSED
+        doc.status = DocumentStatus.PROCESSED
+        from datetime import datetime
+        doc.processed_at = datetime.utcnow()
+        
+        # 11. Commit all changes
+        db.session.commit()
+
+        # 12. Return success result
+        return {
+            'success': True,
+            'message': 'Document processed successfully',
+            'document_id': doc_id,
+            'template_id': template_id,
+            'status': doc.status.value,
+            'extracted_data': extracted_data,
+            'ocr_records_created': len(ocr_data_records),
+            'line_items_created': len(line_item_records)
+        }
+
+    except Exception as e:
+        # Update document status to FAILED on any error
+        try:
+            if 'doc' in locals():
+                doc.status = DocumentStatus.FAILED
+                db.session.commit()
+        except:
+            pass
+        
+        return {'success': False, 'message': f'OCR processing failed: {str(e)}'}
+
+@bp.route('/process_document', methods=['POST'])
+def process_document():
+    """
+    Integrated OCR processing endpoint that handles the full pipeline:
+    document → template → OCR → database storage
+    """
+    data = request.get_json()
+    doc_id = data.get('doc_id')
+    template_id = data.get('template_id')
+
+    if not doc_id or not template_id:
+        return jsonify({'error': 'Missing required fields: doc_id and template_id'}), 400
+
+    result = process_document_internal(doc_id, template_id)
+    
+    if result['success']:
+        return jsonify(result), 200
+    else:
+        return jsonify({'error': result['message']}), 500 

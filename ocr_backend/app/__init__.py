@@ -12,6 +12,9 @@ def create_app(config_class=Config):
     app = Flask(__name__)
     app.config.from_object(config_class)
     
+    # Initialize config-specific settings
+    config_class.init_app(app)
+    
     # Initialize extensions with app
     db.init_app(app)
     migrate.init_app(app, db)
