@@ -2,6 +2,7 @@ import os
 from google import genai
 from google.genai import types
 import json
+from flask import current_app
 
 def call_gemini_ocr(image_path, field_names, custom_prompt=None):
     """
@@ -13,8 +14,13 @@ def call_gemini_ocr(image_path, field_names, custom_prompt=None):
         field_names: List of field names to extract
         custom_prompt: Optional custom prompt for specialized extraction (e.g., tables)
     """
-    # Initialize the client
-    client = genai.Client()
+    # Get API key from configuration
+    api_key = current_app.config.get('GEMINI_API_KEY')
+    if not api_key:
+        raise ValueError("GEMINI_API_KEY not found in configuration. Please set it in your .env file.")
+    
+    # Initialize the client with API key
+    client = genai.Client(api_key=api_key)
     
     with open(image_path, "rb") as img_file:
         image_bytes = img_file.read()
@@ -89,4 +95,4 @@ def parse_gemini_response(response_text, field_names):
         return {"raw_response": response_text, "parse_error": str(e)}
     except Exception as e:
         print(f"General parsing error: {e}")
-        return {"raw_response": response_text, "parse_error": str(e)} 
+        return {"raw_response": response_text, "parse_error": str(e)}
