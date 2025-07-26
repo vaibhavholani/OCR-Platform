@@ -1,49 +1,209 @@
 import os
+import mimetypes
+from pathlib import Path
 from google import genai
 from google.genai import types
 import json
 from flask import current_app
 
-def call_gemini_ocr(image_path, field_names, custom_prompt=None):
+# Comprehensive mapping of Gemini-supported file types
+SUPPORTED_MIME_TYPES = {
+    # Images
+    'image/png': ['.png'],
+    'image/jpeg': ['.jpg', '.jpeg'],
+    'image/webp': ['.webp'],
+    
+    # Videos
+    'video/x-flv': ['.flv'],
+    'video/quicktime': ['.mov'],
+    'video/mpeg': ['.mpeg', '.mpg'],
+    'video/mpegps': ['.mpegps'],
+    'video/mp4': ['.mp4'],
+    'video/webm': ['.webm'],
+    'video/wmv': ['.wmv'],
+    'video/3gpp': ['.3gp', '.3gpp'],
+    
+    # Audio
+    'audio/aac': ['.aac'],
+    'audio/flac': ['.flac'],
+    'audio/mp3': ['.mp3'],
+    'audio/m4a': ['.m4a'],
+    'audio/mpeg': ['.mp3', '.mpeg'],
+    'audio/mpga': ['.mpga'],
+    'audio/mp4': ['.mp4'],
+    'audio/opus': ['.opus'],
+    'audio/pcm': ['.pcm'],
+    'audio/wav': ['.wav'],
+    'audio/webm': ['.webm'],
+    
+    # Documents
+    'application/pdf': ['.pdf'],
+    'text/plain': ['.txt']
+}
+
+# Reverse mapping for extension to MIME type lookup
+EXTENSION_TO_MIME = {}
+for mime_type, extensions in SUPPORTED_MIME_TYPES.items():
+    for ext in extensions:
+        EXTENSION_TO_MIME[ext.lower()] = mime_type
+
+def detect_file_type(file_path):
     """
-    Calls Gemini API to extract specified field names from a JPEG image.
-    Returns the raw response text from Gemini.
+    Intelligently detect the MIME type of a file using multiple methods.
     
     Args:
-        image_path: Path to the image file
-        field_names: List of field names to extract
-        custom_prompt: Optional custom prompt for specialized extraction (e.g., tables)
+        file_path: Path to the file
+        
+    Returns:
+        tuple: (mime_type, file_category) where file_category is 'image', 'video', 'audio', or 'document'
+        
+    Raises:
+        ValueError: If file type is not supported by Gemini API
     """
+    file_path = Path(file_path)
+    
+    # Method 1: Check by file extension first (most reliable for our use case)
+    extension = file_path.suffix.lower()
+    if extension in EXTENSION_TO_MIME:
+        mime_type = EXTENSION_TO_MIME[extension]
+    else:
+        # Method 2: Use Python's mimetypes module as fallback
+        mime_type, _ = mimetypes.guess_type(str(file_path))
+        if mime_type not in SUPPORTED_MIME_TYPES:
+            supported_extensions = [ext for exts in SUPPORTED_MIME_TYPES.values() for ext in exts]
+            raise ValueError(
+                f"Unsupported file type: {extension}. "
+                f"Supported file types: {', '.join(sorted(set(supported_extensions)))}"
+            )
+    
+    # Determine file category for adaptive prompting
+    if mime_type.startswith('image/'):
+        category = 'image'
+    elif mime_type.startswith('video/'):
+        category = 'video'
+    elif mime_type.startswith('audio/'):
+        category = 'audio'
+    elif mime_type.startswith('application/') or mime_type.startswith('text/'):
+        category = 'document'
+    else:
+        category = 'unknown'
+    
+    return mime_type, category
+
+def generate_adaptive_prompt(field_names, file_category, custom_prompt=None):
+    """
+    Generate context-aware prompts based on the type of file being processed.
+    
+    Args:
+        field_names: List of field names to extract
+        file_category: Type of file ('image', 'video', 'audio', 'document')
+        custom_prompt: Optional custom prompt override
+        
+    Returns:
+        str: Optimized prompt for the specific file type
+    """
+    if custom_prompt:
+        return custom_prompt + f" Return your answer as a JSON object. Fields: {', '.join(field_names)}"
+    
+    base_instruction = "You are an intelligent content analysis assistant. "
+    
+    if file_category == 'image':
+        prompt = (
+            base_instruction +
+            "Analyze the provided image and extract the specified information. "
+            "Look carefully at all text, objects, and visual elements in the image. "
+            "For documents or forms, pay special attention to the header and top sections. "
+            "Return your answer as a JSON object mapping each field name to its value. "
+            f"Fields to extract: {', '.join(field_names)}"
+        )
+    elif file_category == 'video':
+        prompt = (
+            base_instruction +
+            "Analyze the provided video content and extract the specified information. "
+            "Consider both visual elements and any audio/speech content. "
+            "Look for text overlays, spoken information, and visual cues throughout the video. "
+            "Return your answer as a JSON object mapping each field name to its value. "
+            f"Fields to extract: {', '.join(field_names)}"
+        )
+    elif file_category == 'audio':
+        prompt = (
+            base_instruction +
+            "Analyze the provided audio content and extract the specified information. "
+            "Transcribe and analyze any speech, identify speakers if relevant, and note audio characteristics. "
+            "Return your answer as a JSON object mapping each field name to its value. "
+            f"Fields to extract: {', '.join(field_names)}"
+        )
+    elif file_category == 'document':
+        prompt = (
+            base_instruction +
+            "Analyze the provided document and extract the specified information. "
+            "Carefully read through the entire document, paying attention to headers, sections, and formatted content. "
+            "For forms or structured documents, focus on labeled fields and data entries. "
+            "Return your answer as a JSON object mapping each field name to its value. "
+            f"Fields to extract: {', '.join(field_names)}"
+        )
+    else:
+        # Fallback for unknown file types
+        prompt = (
+            base_instruction +
+            "Analyze the provided content and extract the specified information. "
+            "Return your answer as a JSON object mapping each field name to its value. "
+            f"Fields to extract: {', '.join(field_names)}"
+        )
+    
+    return prompt
+
+def call_gemini_ocr(file_path, field_names, custom_prompt=None):
+    """
+    Calls Gemini API to extract specified field names from any supported file type.
+    Automatically detects file type and adapts processing accordingly.
+    
+    Args:
+        file_path: Path to the file (images, PDFs, videos, audio, etc.)
+        field_names: List of field names to extract
+        custom_prompt: Optional custom prompt for specialized extraction
+        
+    Returns:
+        str: Raw response text from Gemini
+        
+    Raises:
+        ValueError: If file type is unsupported or API key is missing
+        FileNotFoundError: If file doesn't exist
+    """
+    # Validate file exists
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(f"File not found: {file_path}")
+    
     # Get API key from configuration
     api_key = current_app.config.get('GEMINI_API_KEY')
     if not api_key:
         raise ValueError("GEMINI_API_KEY not found in configuration. Please set it in your .env file.")
     
+    # Detect file type and validate support
+    try:
+        mime_type, file_category = detect_file_type(file_path)
+    except ValueError as e:
+        raise ValueError(f"File type detection failed: {e}")
+    
     # Initialize the client with API key
     client = genai.Client(api_key=api_key)
     
-    with open(image_path, "rb") as img_file:
-        image_bytes = img_file.read()
-
-    if custom_prompt:
-        prompt = custom_prompt + f" Return your answer as a JSON object. Fields: {', '.join(field_names)}"
-    else:
-        prompt = (
-            "You are an OCR extraction assistant. "
-            "Extract the following fields from the provided document image. "
-            "Return your answer as a JSON object mapping each field name to its value. "
-            "Most of the below fields are in the Top Section of the document image. "
-            "If extracting table data, structure it as {'rows': [{'col1': 'value1', 'col2': 'value2'}, ...]}. "
-            f"Fields: {', '.join(field_names)}"
-        )
-
+    # Read file as binary data
+    with open(file_path, "rb") as file:
+        file_bytes = file.read()
+    
+    # Generate appropriate prompt based on file type
+    prompt = generate_adaptive_prompt(field_names, file_category, custom_prompt)
+    
+    # Make API call with detected MIME type
     response = client.models.generate_content(
         model="gemini-2.0-flash",
         contents=[
             prompt,
-            types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg")
+            types.Part.from_bytes(data=file_bytes, mime_type=mime_type)
         ]
     )
+    
     return response.text
 
 def parse_gemini_response(response_text, field_names):

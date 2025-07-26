@@ -3,9 +3,92 @@ from .. import db
 from ..models import OCRData, OCRLineItem, OCRLineItemValue, Document, TemplateField, SubTemplateField, Template
 from ..utils.gemini_ocr import call_gemini_ocr, parse_gemini_response
 from ..utils.enums import DocumentStatus, FieldType
+from ..tally import (
+    auto_load_tally_options, 
+    load_companies_as_options, 
+    load_ledgers_as_options, 
+    load_stock_items_as_options,
+    get_field_options_summary,
+    refresh_field_options,
+    load_customer_options,
+    load_vendor_options,
+    load_all_ledger_options,
+    TallyFieldOptionsError
+)
 import os
 
 bp = Blueprint('ocr', __name__, url_prefix='/api/ocr')
+
+def build_comprehensive_text_prompt(template, text_fields):
+    """
+    Build comprehensive prompt combining template + field level AI instructions for text fields.
+    
+    Args:
+        template: Template object with ai_instructions
+        text_fields: List of TemplateField objects for text-based fields
+        
+    Returns:
+        str: Enhanced prompt combining all instruction levels
+    """
+    parts = []
+    
+    # Template-level instructions
+    if template.ai_instructions:
+        parts.append(f"General Instructions: {template.ai_instructions}")
+    
+    # Field-specific instructions
+    field_instructions = []
+    for field in text_fields:
+        if field.ai_instructions:
+            field_instructions.append(f"- {field.field_name.value}: {field.ai_instructions}")
+    
+    if field_instructions:
+        parts.append(f"Field-specific Instructions:\n" + "\n".join(field_instructions))
+    
+    # Base extraction request
+    field_names = [f.field_name.value for f in text_fields]
+    parts.append(f"Extract the following fields: {', '.join(field_names)}")
+    parts.append("Return as JSON object mapping field names to values.")
+    
+    return "\n\n".join(parts)
+
+def build_comprehensive_table_prompt(template, table_field, sub_fields):
+    """
+    Build comprehensive prompt combining template + table + sub-field level AI instructions.
+    
+    Args:
+        template: Template object with ai_instructions
+        table_field: TemplateField object for the table field
+        sub_fields: List of SubTemplateField objects for table columns
+        
+    Returns:
+        str: Enhanced prompt combining all instruction levels
+    """
+    parts = []
+    
+    # Template-level instructions
+    if template.ai_instructions:
+        parts.append(f"General Instructions: {template.ai_instructions}")
+    
+    # Table-level instructions
+    if table_field.ai_instructions:
+        parts.append(f"Table Instructions: {table_field.ai_instructions}")
+    
+    # Sub-field level instructions
+    sub_field_instructions = []
+    for sub_field in sub_fields:
+        if sub_field.ai_instructions:
+            sub_field_instructions.append(f"- {sub_field.field_name.value}: {sub_field.ai_instructions}")
+    
+    if sub_field_instructions:
+        parts.append(f"Column-specific Instructions:\n" + "\n".join(sub_field_instructions))
+    
+    # Base table extraction request
+    sub_field_names = [sf.field_name.value for sf in sub_fields]
+    parts.append(f"Extract table data for {table_field.field_name.value} with columns: {', '.join(sub_field_names)}")
+    parts.append("Return as JSON with 'rows' array containing objects for each row.")
+    
+    return "\n\n".join(parts)
 
 def format_table_data_for_response(table_data_results):
     """
@@ -291,15 +374,17 @@ def process_document_internal(doc_id, template_id):
         table_data_results = {} # New dictionary to store table data results
 
         # Separate fields by type
-        text_fields = [f for f in template_fields if f.field_type in [FieldType.TEXT, FieldType.NUMBER, FieldType.DATE, FieldType.EMAIL, FieldType.CURRENCY]]
+        text_fields = [f for f in template_fields if f.field_type in [FieldType.TEXT, FieldType.SELECT, FieldType.NUMBER, FieldType.DATE, FieldType.EMAIL, FieldType.CURRENCY]]
         table_fields = [f for f in template_fields if f.field_type == FieldType.TABLE]
 
         # 7. Process text-based fields
         if text_fields:
+            # Build enhanced prompt with hierarchical AI instructions
+            enhanced_prompt = build_comprehensive_text_prompt(template, text_fields)
             field_names = [f.field_name.value for f in text_fields]
             
-            # Call Gemini OCR
-            gemini_response = call_gemini_ocr(doc.file_path, field_names)
+            # Call Gemini OCR with enhanced prompt
+            gemini_response = call_gemini_ocr(doc.file_path, field_names, custom_prompt=enhanced_prompt)
             extracted_fields = parse_gemini_response(gemini_response, field_names)
             
             # Check for parsing errors
@@ -328,9 +413,9 @@ def process_document_internal(doc_id, template_id):
             if sub_fields:
                 sub_field_names = [sf.field_name.value for sf in sub_fields]
                 
-                # Create table-specific prompt
-                table_prompt = f"Extract table data for {table_field.field_name.value} with columns: {', '.join(sub_field_names)}"
-                table_response = call_gemini_ocr(doc.file_path, sub_field_names, custom_prompt=table_prompt)
+                # Create enhanced table prompt with hierarchical AI instructions
+                enhanced_table_prompt = build_comprehensive_table_prompt(template, table_field, sub_fields)
+                table_response = call_gemini_ocr(doc.file_path, sub_field_names, custom_prompt=enhanced_table_prompt)
                 table_data = parse_gemini_response(table_response, sub_field_names)
                 
                 # Check for parsing errors
@@ -431,3 +516,100 @@ def process_document():
         return jsonify(result), 200
     else:
         return jsonify({'error': result['message']}), 500 
+
+@bp.route('/field/<int:field_id>/load_tally_options', methods=['POST'])
+def load_field_tally_options(field_id):
+    """
+    Load Tally data as options for a SELECT field.
+    
+    Request Body:
+    {
+        "data_type": "auto|companies|ledgers|stock_items|customers|vendors|all_ledgers",
+        "group_filter": "optional_group_name",
+        "clear_existing": true
+    }
+    """
+    try:
+        data = request.get_json() or {}
+        data_type = data.get('data_type', 'auto')
+        group_filter = data.get('group_filter')
+        clear_existing = data.get('clear_existing', True)
+        
+        if data_type == 'auto':
+            result = auto_load_tally_options(field_id, clear_existing)
+        elif data_type == 'companies':
+            result = load_companies_as_options(field_id, clear_existing)
+        elif data_type == 'ledgers':
+            result = load_ledgers_as_options(field_id, group_filter, clear_existing)
+        elif data_type == 'stock_items':
+            result = load_stock_items_as_options(field_id, group_filter, clear_existing)
+        elif data_type == 'customers':
+            result = load_customer_options(field_id)
+        elif data_type == 'vendors':
+            result = load_vendor_options(field_id)
+        elif data_type == 'all_ledgers':
+            result = load_all_ledger_options(field_id)
+        else:
+            return jsonify({'error': 'Invalid data_type. Valid options: auto, companies, ledgers, stock_items, customers, vendors, all_ledgers'}), 400
+            
+        return jsonify(result)
+        
+    except TallyFieldOptionsError as e:
+        return jsonify({'error': str(e)}), 400
+    except Exception as e:
+        current_app.logger.error(f"Error loading Tally options for field {field_id}: {e}")
+        return jsonify({'error': f'Unexpected error: {str(e)}'}), 500
+
+@bp.route('/field/<int:field_id>/options', methods=['GET'])
+def get_field_options(field_id):
+    """Get current options summary for a field"""
+    try:
+        summary = get_field_options_summary(field_id)
+        
+        if 'error' in summary:
+            return jsonify(summary), 404
+            
+        return jsonify(summary)
+        
+    except Exception as e:
+        current_app.logger.error(f"Error getting field options for field {field_id}: {e}")
+        return jsonify({'error': f'Failed to get field options: {str(e)}'}), 500
+
+@bp.route('/field/<int:field_id>/refresh_options', methods=['POST'])
+def refresh_field_tally_options(field_id):
+    """Refresh field options by reloading from Tally"""
+    try:
+        result = refresh_field_options(field_id)
+        return jsonify(result)
+        
+    except TallyFieldOptionsError as e:
+        return jsonify({'error': str(e)}), 400
+    except Exception as e:
+        current_app.logger.error(f"Error refreshing options for field {field_id}: {e}")
+        return jsonify({'error': f'Unexpected error: {str(e)}'}), 500
+
+@bp.route('/field/<int:field_id>/load_customers', methods=['POST'])
+def load_field_customers(field_id):
+    """Load customer ledgers as options for a field"""
+    try:
+        result = load_customer_options(field_id)
+        return jsonify(result)
+        
+    except TallyFieldOptionsError as e:
+        return jsonify({'error': str(e)}), 400
+    except Exception as e:
+        current_app.logger.error(f"Error loading customers for field {field_id}: {e}")
+        return jsonify({'error': f'Unexpected error: {str(e)}'}), 500
+
+@bp.route('/field/<int:field_id>/load_vendors', methods=['POST'])
+def load_field_vendors(field_id):
+    """Load vendor ledgers as options for a field"""
+    try:
+        result = load_vendor_options(field_id)
+        return jsonify(result)
+        
+    except TallyFieldOptionsError as e:
+        return jsonify({'error': str(e)}), 400
+    except Exception as e:
+        current_app.logger.error(f"Error loading vendors for field {field_id}: {e}")
+        return jsonify({'error': f'Unexpected error: {str(e)}'}), 500 

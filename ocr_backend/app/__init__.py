@@ -21,13 +21,14 @@ def create_app(config_class=Config):
     CORS(app)
     
     # Register blueprints
-    from .api import user_routes, document_routes, export_routes, template_routes, ocr_routes, enum_routes
+    from .api import user_routes, document_routes, export_routes, template_routes, ocr_routes, enum_routes, tally_routes
     app.register_blueprint(user_routes.bp)
     app.register_blueprint(document_routes.bp)
     app.register_blueprint(export_routes.bp)
     app.register_blueprint(template_routes.bp)
     app.register_blueprint(ocr_routes.bp)
     app.register_blueprint(enum_routes.bp)
+    app.register_blueprint(tally_routes.bp)
     
     # Create database tables on first request
     with app.app_context():

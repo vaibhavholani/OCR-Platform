@@ -1,9 +1,10 @@
-from flask import Blueprint, jsonify, request, current_app
+from flask import Blueprint, jsonify, request, current_app, send_file, abort
 from .. import db
 from ..models import Document, OCRData, OCRLineItem, OCRLineItemValue, Template, TemplateField, SubTemplateField
 from ..utils.enums import DocumentStatus, FieldType
 import os
 from werkzeug.utils import secure_filename
+from pathlib import Path
 
 bp = Blueprint('documents', __name__, url_prefix='/api/documents')
 
@@ -75,6 +76,128 @@ def get_document(document_id):
     """Get a specific document by ID"""
     document = Document.query.get_or_404(document_id)
     return jsonify(document.to_dict())
+
+@bp.route('/<int:document_id>/download', methods=['GET'])
+def download_document(document_id):
+    """Download the original file for a document"""
+    try:
+        document = Document.query.get_or_404(document_id)
+        
+        # Resolve file path
+        if os.path.isabs(document.file_path):
+            file_path = Path(document.file_path)
+        else:
+            # Relative path - resolve from base directory
+            base_dir = Path(current_app.config['BASE_DIR'])
+            file_path = base_dir / document.file_path
+        
+        # Security check: ensure the file path is within allowed directories
+        base_dir = Path(current_app.config['BASE_DIR'])
+        upload_dir = Path(current_app.config['UPLOAD_FOLDER'])
+        
+        try:
+            # Resolve to absolute path and check if it's within allowed directories
+            resolved_path = file_path.resolve()
+            base_dir_resolved = base_dir.resolve()
+            upload_dir_resolved = upload_dir.resolve()
+            
+            # Check if file is within base directory or upload directory
+            is_in_base = str(resolved_path).startswith(str(base_dir_resolved))
+            is_in_upload = str(resolved_path).startswith(str(upload_dir_resolved))
+            
+            if not (is_in_base or is_in_upload):
+                current_app.logger.warning(f"Attempted access to file outside allowed directories: {resolved_path}")
+                abort(403)
+                
+        except (OSError, ValueError) as e:
+            current_app.logger.error(f"Path resolution error: {str(e)}")
+            abort(400)
+        
+        # Check if file exists
+        if not file_path.exists():
+            current_app.logger.error(f"File not found: {file_path}")
+            return jsonify({'error': 'File not found'}), 404
+        
+        # Check if it's actually a file (not a directory)
+        if not file_path.is_file():
+            current_app.logger.error(f"Path is not a file: {file_path}")
+            return jsonify({'error': 'Invalid file path'}), 400
+        
+        # Send the file with original filename
+        return send_file(
+            file_path,
+            as_attachment=True,
+            download_name=document.original_filename,
+            mimetype='application/octet-stream'
+        )
+        
+    except Exception as e:
+        current_app.logger.error(f"Error downloading document {document_id}: {str(e)}")
+        return jsonify({'error': 'Failed to download file'}), 500
+
+@bp.route('/<int:document_id>/view', methods=['GET'])
+def view_document(document_id):
+    """View the original file inline (for browser-viewable files like PDFs, images)"""
+    try:
+        document = Document.query.get_or_404(document_id)
+        
+        # Resolve file path
+        if os.path.isabs(document.file_path):
+            file_path = Path(document.file_path)
+        else:
+            # Relative path - resolve from base directory
+            base_dir = Path(current_app.config['BASE_DIR'])
+            file_path = base_dir / document.file_path
+        
+        # Security check: ensure the file path is within allowed directories
+        base_dir = Path(current_app.config['BASE_DIR'])
+        upload_dir = Path(current_app.config['UPLOAD_FOLDER'])
+        
+        try:
+            # Resolve to absolute path and check if it's within allowed directories
+            resolved_path = file_path.resolve()
+            base_dir_resolved = base_dir.resolve()
+            upload_dir_resolved = upload_dir.resolve()
+            
+            # Check if file is within base directory or upload directory
+            is_in_base = str(resolved_path).startswith(str(base_dir_resolved))
+            is_in_upload = str(resolved_path).startswith(str(upload_dir_resolved))
+            
+            if not (is_in_base or is_in_upload):
+                current_app.logger.warning(f"Attempted access to file outside allowed directories: {resolved_path}")
+                abort(403)
+                
+        except (OSError, ValueError) as e:
+            current_app.logger.error(f"Path resolution error: {str(e)}")
+            abort(400)
+        
+        # Check if file exists
+        if not file_path.exists():
+            current_app.logger.error(f"File not found: {file_path}")
+            return jsonify({'error': 'File not found'}), 404
+        
+        # Check if it's actually a file (not a directory)
+        if not file_path.is_file():
+            current_app.logger.error(f"Path is not a file: {file_path}")
+            return jsonify({'error': 'Invalid file path'}), 400
+        
+        # Determine mimetype based on file extension
+        import mimetypes
+        mimetype, _ = mimetypes.guess_type(str(file_path))
+        if mimetype is None:
+            mimetype = 'application/octet-stream'
+        
+        # Send the file for inline viewing
+        return send_file(
+            file_path,
+            as_attachment=False,  # Don't force download
+            download_name=document.original_filename,
+            mimetype=mimetype
+        )
+        
+    except Exception as e:
+        current_app.logger.error(f"Error viewing document {document_id}: {str(e)}")
+        return jsonify({'error': 'Failed to view file'}), 500
 
 @bp.route('/', methods=['POST'])
 def create_document():
