@@ -144,6 +144,8 @@ def create_stock_item(connector: TallyConnector, item_data: Dict) -> Dict:
             'response': response
         }
         
+        # breakpoint()  # Debugging point to inspect response
+        
         logger.info(f"Created stock item: {name}")
         return result
         

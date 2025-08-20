@@ -1,6 +1,6 @@
 from flask import Blueprint, jsonify, request, current_app
 from .. import db
-from ..models import OCRData, OCRLineItem, OCRLineItemValue, Document, TemplateField, SubTemplateField, Template
+from ..models import OCRData, OCRLineItem, OCRLineItemValue, Document, TemplateField, SubTemplateField, Template, FieldOption
 from ..utils.gemini_ocr import call_gemini_ocr, parse_gemini_response
 from ..utils.enums import DocumentStatus, FieldType
 from ..tally import (
@@ -16,6 +16,130 @@ from ..tally import (
     TallyFieldOptionsError
 )
 import os
+from fuzzywuzzy import fuzz
+from fuzzywuzzy import process
+import json
+
+def map_select_field_value(ocr_value, field_options, field_name):
+    """
+    Map OCR extracted value to field options using fuzzy matching and LLM confirmation.
+    
+    Args:
+        ocr_value: The raw OCR extracted value
+        field_options: List of FieldOption objects for the field
+        field_name: Name of the field for context
+        
+    Returns:
+        str: Final mapped value or None if no match found
+    """
+    if not ocr_value or not field_options:
+        return ocr_value
+    
+    # Extract option labels for matching
+    option_labels = [option.option_label for option in field_options]
+    option_values = [option.option_value for option in field_options]
+    
+    # Get top 5 fuzzy matches based on option labels
+    fuzzy_matches = process.extractBests(
+        ocr_value, 
+        option_labels, 
+        scorer=fuzz.WRatio,  # Use weighted ratio for better matching
+        score_cutoff=40,     # Increased minimum similarity score
+        limit=5              # Top 5 matches
+    )
+    
+    # If no decent matches found, return original value
+    if not fuzzy_matches:
+        return ocr_value
+    
+    # Build LLM prompt for final selection
+    match_options = []
+    for match, score in fuzzy_matches:
+        # Find corresponding option value
+        matching_option = next((opt for opt in field_options if opt.option_label == match), None)
+        if matching_option:
+            match_options.append({
+                'value': matching_option.option_value,
+                'label': matching_option.option_label,
+                'similarity_score': score
+            })
+    
+    # Create LLM prompt for final selection
+    llm_prompt = f"""
+You are helping to map OCR extracted text to predefined options for a field called "{field_name}".
+
+OCR Extracted Value: "{ocr_value}"
+
+Available Options (with fuzzy matching scores):
+"""
+    
+    for i, option in enumerate(match_options, 1):
+        llm_prompt += f"{i}. Value: '{option['value']}' | Label: '{option['label']}' | Similarity: {option['similarity_score']}%\n"
+    
+    llm_prompt += f"""
+Please analyze the OCR extracted value "{ocr_value}" and determine the best match from the above options.
+
+Instructions:
+1. Consider both semantic meaning and spelling variations
+2. Account for OCR errors (character substitution, missing characters, etc.)
+3. If you find a good match, return ONLY the option VALUE (not the label)
+4. If none of the options are a reasonable match, return "NONE"
+
+Response (return only the option value or "NONE"):
+"""
+    
+    try:
+        # Call Gemini for final selection - text only
+        from google import genai
+        from flask import current_app
+        
+        # Get API key
+        api_key = current_app.config.get('GEMINI_API_KEY')
+        if not api_key:
+            current_app.logger.warning("GEMINI_API_KEY not found, using fuzzy match fallback")
+            # Fallback to best fuzzy match
+            if match_options:
+                return match_options[0]['value']
+            return ocr_value
+        
+        # Configure Gemini client
+        client = genai.Client(api_key=api_key)
+        
+        # Log the mapping attempt
+        current_app.logger.info(f"Mapping SELECT field '{field_name}': '{ocr_value}' with {len(match_options)} options")
+        
+        # Allow the model to be overridden via app config (set GEMINI_MODEL in .env)
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",           # newer, fast + thinking, free tier
+            contents=[llm_prompt]
+        )
+
+        
+        # Extract text from response
+        if response and response.text:
+            response_text = response.text.strip().strip('"\'')
+            
+            # Check if response is one of our valid option values
+            valid_values = [opt['value'] for opt in match_options]
+            if response_text in valid_values:
+                current_app.logger.info(f"LLM selected: '{response_text}' for '{ocr_value}'")
+                return response_text
+            elif response_text.upper() == "NONE":
+                current_app.logger.info(f"LLM determined no match for '{ocr_value}'")
+                return None
+        
+        # Fallback: return the highest scoring fuzzy match if LLM fails
+        if match_options:
+            current_app.logger.warning(f"LLM response unclear, using fuzzy match fallback for '{ocr_value}'")
+            return match_options[0]['value']
+            
+    except Exception as e:
+        current_app.logger.error(f"Error in LLM option mapping for '{field_name}': {str(e)}")
+        # Fallback: return the highest scoring fuzzy match
+        if match_options:
+            return match_options[0]['value']
+    
+    return ocr_value
 
 bp = Blueprint('ocr', __name__, url_prefix='/api/ocr')
 
@@ -376,18 +500,21 @@ def process_document_internal(doc_id, template_id):
         # Separate fields by type
         text_fields = [f for f in template_fields if f.field_type in [FieldType.TEXT, FieldType.SELECT, FieldType.NUMBER, FieldType.DATE, FieldType.EMAIL, FieldType.CURRENCY]]
         table_fields = [f for f in template_fields if f.field_type == FieldType.TABLE]
-
         # 7. Process text-based fields
         if text_fields:
             # Build enhanced prompt with hierarchical AI instructions
             enhanced_prompt = build_comprehensive_text_prompt(template, text_fields)
+            print("Enhanced prompt for text fields:", enhanced_prompt)
             field_names = [f.field_name.value for f in text_fields]
             
             # Call Gemini OCR with enhanced prompt
             gemini_response = call_gemini_ocr(doc.file_path, field_names, custom_prompt=enhanced_prompt)
+            print("Gemini response for text fields:", gemini_response)
             extracted_fields = parse_gemini_response(gemini_response, field_names)
-            
-            # Check for parsing errors
+            # print("extracted fields {extracted_fields}")
+            print("Parsed extracted fields:", extracted_fields)
+
+            # Check for parsing error
             if 'parse_error' in extracted_fields:
                 doc.status = DocumentStatus.FAILED
                 db.session.commit()
@@ -397,14 +524,32 @@ def process_document_internal(doc_id, template_id):
             for field in text_fields:
                 field_value = extracted_fields.get(field.field_name.value)
                 if field_value is not None:
+                    #Map SELECT field values to predefined options
+                    final_value = field_value
+                    if field.field_type == FieldType.SELECT:
+                        # Get field options for SELECT fields
+                        field_options = FieldOption.query.filter_by(field_id=field.field_id).all()
+                        if field_options:
+                            # Use fuzzy matching + LLM to map the value
+                            mapped_value = map_select_field_value(
+                                str(field_value), 
+                                field_options, 
+                                field.field_name.value
+                            )
+                            if mapped_value is not None:
+                                final_value = mapped_value
+                                print(f"Mapped SELECT field '{field.field_name.value}': '{field_value}' -> '{final_value}'")
+                            else:
+                                print(f"No mapping found for SELECT field '{field.field_name.value}': '{field_value}'")
+                    
                     ocr_data = OCRData(
                         document_id=doc_id,
                         field_id=field.field_id,
-                        predicted_value=str(field_value),
+                        predicted_value=str(final_value),
                         confidence=0.8  # Default confidence, can be improved
                     )
                     ocr_data_records.append(ocr_data)
-                    extracted_data[field.field_name.value] = field_value
+                    extracted_data[field.field_name.value] = final_value
 
         # 8. Process table fields
         for table_field in table_fields:
@@ -460,7 +605,9 @@ def process_document_internal(doc_id, template_id):
                         line_item_records.append(line_item)
 
         # 9. Save all OCR data to database
+        # print("OCR data", ocr_data_records)
         for ocr_data in ocr_data_records:
+            print("Adding OCR data record:", ocr_data.to_dict())
             db.session.add(ocr_data)
 
         # 10. Update document status to PROCESSED
@@ -509,7 +656,7 @@ def process_document():
 
     if not doc_id or not template_id:
         return jsonify({'error': 'Missing required fields: doc_id and template_id'}), 400
-
+    print(f"Processing document {doc_id} with template {template_id}")
     result = process_document_internal(doc_id, template_id)
     
     if result['success']:
@@ -612,4 +759,4 @@ def load_field_vendors(field_id):
         return jsonify({'error': str(e)}), 400
     except Exception as e:
         current_app.logger.error(f"Error loading vendors for field {field_id}: {e}")
-        return jsonify({'error': f'Unexpected error: {str(e)}'}), 500 
+        return jsonify({'error': f'Unexpected error: {str(e)}'}), 500

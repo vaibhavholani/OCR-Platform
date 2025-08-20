@@ -17,7 +17,7 @@ class TallyConfig:
     
     # Alternative library directories for different versions
     # _PARENT = Path(__file__).parent
-    _PARENT = "/Users/vaibhavholani/development/business/OCR-Platform/ocr_backend/app/tally"
+    _PARENT = "/home/sarohy/upwork/vaibhav/OCR-Platform/ocr_backend/app/tally"
 
     LEGACY_LIB_DIR = os.path.join(_PARENT, "tally_dll_files", "lib")
     LATEST_LIB_DIR = os.path.join(_PARENT, "tally_dll_files", "lib_new_name_space")
