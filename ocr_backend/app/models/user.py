@@ -1,4 +1,5 @@
 from datetime import datetime
+import secrets
 from .. import db
 from werkzeug.security import generate_password_hash, check_password_hash
 
@@ -9,6 +10,7 @@ class User(db.Model):
     name = db.Column(db.String(100), nullable=False)
     email = db.Column(db.String(120), unique=True, nullable=False)
     password_hash = db.Column(db.String(255), nullable=False)
+    api_key = db.Column(db.String(32), unique=True, nullable=False, default=lambda: secrets.token_hex(16))
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
@@ -28,6 +30,7 @@ class User(db.Model):
             'user_id': self.user_id,
             'name': self.name,
             'email': self.email,
+            'api_key': self.api_key,
             'password': getattr(self, '_plain_password', None) or self.password_hash,  # For demo only
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None
