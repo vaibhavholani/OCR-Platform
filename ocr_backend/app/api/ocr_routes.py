@@ -35,8 +35,11 @@ def map_select_field_value(ocr_value, field_options, field_name):
     Returns:
         str: Final mapped value or None if no match found
     """
-    if not ocr_value or not field_options:
-        return ocr_value
+    if not ocr_value:
+        return None
+    
+    if not field_options:
+        return ocr_value  # No options configured, return original
     
     # Extract option labels for matching
     option_labels = [option.option_label for option in field_options]
@@ -51,9 +54,9 @@ def map_select_field_value(ocr_value, field_options, field_name):
         limit=5              # Top 5 matches
     )
     
-    # If no decent matches found, return original value
+    # If no decent matches found, return None (no mapping found)
     if not fuzzy_matches:
-        return ocr_value
+        return None
     
     # Build LLM prompt for final selection
     match_options = []
@@ -103,7 +106,7 @@ Response (return only the option value or "NONE"):
             # Fallback to best fuzzy match
             if match_options:
                 return match_options[0]['value']
-            return ocr_value
+            return None
         
         # Configure Gemini client
         client = genai.Client(api_key=api_key)
@@ -142,7 +145,7 @@ Response (return only the option value or "NONE"):
         if match_options:
             return match_options[0]['value']
     
-    return ocr_value
+    return None
 
 bp = Blueprint('ocr', __name__, url_prefix='/api/ocr')
 
@@ -529,6 +532,9 @@ def process_document_internal(doc_id, template_id):
                 if field_value is not None:
                     #Map SELECT field values to predefined options
                     final_value = field_value
+                    original_value = str(field_value)
+                    was_mapped = False
+                    
                     if field.field_type == FieldType.SELECT:
                         # Get field options for SELECT fields
                         field_options = FieldOption.query.filter_by(field_id=field.field_id).all()
@@ -541,6 +547,7 @@ def process_document_internal(doc_id, template_id):
                             )
                             if mapped_value is not None:
                                 final_value = mapped_value
+                                was_mapped = True
                                 print(f"Mapped SELECT field '{field.field_name.value}': '{field_value}' -> '{final_value}'")
                             else:
                                 print(f"No mapping found for SELECT field '{field.field_name.value}': '{field_value}'")
@@ -553,6 +560,11 @@ def process_document_internal(doc_id, template_id):
                     )
                     ocr_data_records.append(ocr_data)
                     extracted_data[field.field_name.value] = final_value
+                    
+                    # Add mapping metadata for SELECT fields
+                    if field.field_type == FieldType.SELECT:
+                        extracted_data[f"{field.field_name.value}_original"] = original_value
+                        extracted_data[f"{field.field_name.value}_mapped"] = was_mapped
 
         # 8. Process table fields
         for table_field in table_fields:
@@ -600,6 +612,9 @@ def process_document_internal(doc_id, template_id):
                             if value is not None:
                                 # Map SELECT sub-field values to predefined options
                                 final_value = value
+                                original_value = str(value)
+                                was_mapped = False
+                                
                                 if sub_field.data_type == DataType.SELECT:
                                     # Get sub-field options for SELECT sub-fields
                                     sub_field_options = SubTemplateFieldOption.query.filter_by(sub_temp_field_id=sub_field.sub_temp_field_id).all()
@@ -612,12 +627,18 @@ def process_document_internal(doc_id, template_id):
                                         )
                                         if mapped_value is not None:
                                             final_value = mapped_value
+                                            was_mapped = True
                                             print(f"Mapped SELECT sub-field '{sub_field.field_name.value}': '{value}' -> '{final_value}'")
                                         else:
                                             print(f"No mapping found for SELECT sub-field '{sub_field.field_name.value}': '{value}'")
                                 
                                 # Store mapped value for response
                                 mapped_row_data[sub_field.field_name.value] = final_value
+                                
+                                # Add mapping metadata for SELECT fields
+                                if sub_field.data_type == DataType.SELECT:
+                                    mapped_row_data[f"{sub_field.field_name.value}_original"] = original_value
+                                    mapped_row_data[f"{sub_field.field_name.value}_mapped"] = was_mapped
                                 
                                 line_item_value = OCRLineItemValue(
                                     ocr_items_id=line_item.ocr_items_id,
