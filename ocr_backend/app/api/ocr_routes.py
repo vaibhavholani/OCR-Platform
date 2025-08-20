@@ -1,8 +1,8 @@
 from flask import Blueprint, jsonify, request, current_app
 from .. import db
-from ..models import OCRData, OCRLineItem, OCRLineItemValue, Document, TemplateField, SubTemplateField, Template, FieldOption
+from ..models import OCRData, OCRLineItem, OCRLineItemValue, Document, TemplateField, SubTemplateField, Template, FieldOption, SubTemplateFieldOption
 from ..utils.gemini_ocr import call_gemini_ocr, parse_gemini_response
-from ..utils.enums import DocumentStatus, FieldType
+from ..utils.enums import DocumentStatus, FieldType, DataType
 from ..tally import (
     auto_load_tally_options, 
     load_companies_as_options, 
@@ -13,6 +13,9 @@ from ..tally import (
     load_customer_options,
     load_vendor_options,
     load_all_ledger_options,
+    load_stock_items_as_sub_field_options,
+    load_ledgers_as_sub_field_options,
+    auto_load_tally_sub_field_options,
     TallyFieldOptionsError
 )
 import os
@@ -594,10 +597,28 @@ def process_document_internal(doc_id, template_id):
                         for sub_field in sub_fields:
                             value = row_data.get(sub_field.field_name.value)
                             if value is not None:
+                                # Map SELECT sub-field values to predefined options
+                                final_value = value
+                                if sub_field.data_type == DataType.SELECT:
+                                    # Get sub-field options for SELECT sub-fields
+                                    sub_field_options = SubTemplateFieldOption.query.filter_by(sub_temp_field_id=sub_field.sub_temp_field_id).all()
+                                    if sub_field_options:
+                                        # Use fuzzy matching + LLM to map the value
+                                        mapped_value = map_select_field_value(
+                                            str(value), 
+                                            sub_field_options, 
+                                            sub_field.field_name.value
+                                        )
+                                        if mapped_value is not None:
+                                            final_value = mapped_value
+                                            print(f"Mapped SELECT sub-field '{sub_field.field_name.value}': '{value}' -> '{final_value}'")
+                                        else:
+                                            print(f"No mapping found for SELECT sub-field '{sub_field.field_name.value}': '{value}'")
+                                
                                 line_item_value = OCRLineItemValue(
                                     ocr_items_id=line_item.ocr_items_id,
                                     sub_temp_field_id=sub_field.sub_temp_field_id,
-                                    predicted_value=str(value),
+                                    predicted_value=str(final_value),
                                     confidence=0.8
                                 )
                                 db.session.add(line_item_value)
@@ -759,4 +780,74 @@ def load_field_vendors(field_id):
         return jsonify({'error': str(e)}), 400
     except Exception as e:
         current_app.logger.error(f"Error loading vendors for field {field_id}: {e}")
+        return jsonify({'error': f'Unexpected error: {str(e)}'}), 500
+
+# Sub-Template Field Tally Options Endpoints
+@bp.route('/sub-field/<int:sub_field_id>/load_tally_options', methods=['POST'])
+def load_sub_field_tally_options(sub_field_id):
+    """
+    Load Tally data as options for a SELECT sub-template field.
+    
+    Request Body:
+    {
+        "data_type": "auto|stock_items|ledgers",
+        "group_filter": "optional_group_name",
+        "clear_existing": true
+    }
+    """
+    try:
+        data = request.get_json() or {}
+        data_type = data.get('data_type', 'auto')
+        group_filter = data.get('group_filter')
+        clear_existing = data.get('clear_existing', True)
+        
+        if data_type == 'auto':
+            result = auto_load_tally_sub_field_options(sub_field_id, clear_existing)
+        elif data_type == 'stock_items':
+            result = load_stock_items_as_sub_field_options(sub_field_id, group_filter, clear_existing)
+        elif data_type == 'ledgers':
+            result = load_ledgers_as_sub_field_options(sub_field_id, group_filter, clear_existing)
+        else:
+            return jsonify({'error': 'Invalid data_type. Valid options: auto, stock_items, ledgers'}), 400
+            
+        return jsonify(result)
+        
+    except TallyFieldOptionsError as e:
+        return jsonify({'error': str(e)}), 400
+    except Exception as e:
+        current_app.logger.error(f"Error loading Tally options for sub-field {sub_field_id}: {e}")
+        return jsonify({'error': f'Unexpected error: {str(e)}'}), 500
+
+@bp.route('/sub-field/<int:sub_field_id>/load_stock_items', methods=['POST'])
+def load_sub_field_stock_items(sub_field_id):
+    """Load stock items as options for a sub-template field"""
+    try:
+        data = request.get_json() or {}
+        stock_group = data.get('stock_group')
+        clear_existing = data.get('clear_existing', True)
+        
+        result = load_stock_items_as_sub_field_options(sub_field_id, stock_group, clear_existing)
+        return jsonify(result)
+        
+    except TallyFieldOptionsError as e:
+        return jsonify({'error': str(e)}), 400
+    except Exception as e:
+        current_app.logger.error(f"Error loading stock items for sub-field {sub_field_id}: {e}")
+        return jsonify({'error': f'Unexpected error: {str(e)}'}), 500
+
+@bp.route('/sub-field/<int:sub_field_id>/load_ledgers', methods=['POST'])
+def load_sub_field_ledgers(sub_field_id):
+    """Load ledgers as options for a sub-template field"""
+    try:
+        data = request.get_json() or {}
+        ledger_group = data.get('ledger_group')
+        clear_existing = data.get('clear_existing', True)
+        
+        result = load_ledgers_as_sub_field_options(sub_field_id, ledger_group, clear_existing)
+        return jsonify(result)
+        
+    except TallyFieldOptionsError as e:
+        return jsonify({'error': str(e)}), 400
+    except Exception as e:
+        current_app.logger.error(f"Error loading ledgers for sub-field {sub_field_id}: {e}")
         return jsonify({'error': f'Unexpected error: {str(e)}'}), 500

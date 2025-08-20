@@ -15,6 +15,7 @@ class SubTemplateField(db.Model):
     
     # Relationships
     ocr_line_item_values = db.relationship('OCRLineItemValue', backref='sub_template_field', lazy='dynamic', cascade='all, delete-orphan')
+    sub_field_options = db.relationship('SubTemplateFieldOption', backref='sub_template_field', lazy='dynamic', cascade='all, delete-orphan')
     
     def to_dict(self):
         return {
@@ -24,7 +25,8 @@ class SubTemplateField(db.Model):
             'data_type': self.data_type.value if self.data_type else None,
             'ai_instructions': self.ai_instructions,
             'created_at': self.created_at.isoformat() if self.created_at else None,
-            'updated_at': self.updated_at.isoformat() if self.updated_at else None
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+            'sub_field_options': [option.to_dict() for option in self.sub_field_options]
         }
     
     def __repr__(self):

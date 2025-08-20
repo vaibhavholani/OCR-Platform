@@ -4,6 +4,7 @@ from .template import Template
 from .template_field import TemplateField
 from .sub_template_field import SubTemplateField
 from .field_option import FieldOption
+from .sub_template_field_option import SubTemplateFieldOption
 from .ocr_data import OCRData
 from .ocr_line_item import OCRLineItem
 from .ocr_line_item_value import OCRLineItemValue
@@ -17,6 +18,7 @@ __all__ = [
     'TemplateField',
     'SubTemplateField',
     'FieldOption',
+    'SubTemplateFieldOption',
     'OCRData',
     'OCRLineItem',
     'OCRLineItemValue',
