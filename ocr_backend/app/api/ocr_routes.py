@@ -575,14 +575,12 @@ def process_document_internal(doc_id, template_id):
                 
                 # Handle table data (assuming it returns a list of rows)
                 if isinstance(table_data, dict) and 'rows' in table_data:
-                    # Store table data for response
-                    table_data_results[table_field.field_id] = {
-                        'field_name': table_field.field_name.value,
-                        'sub_fields': sub_fields,
-                        'table_data': table_data
+                    # Create a copy of table_data to store mapped values for response
+                    mapped_table_data = {
+                        'rows': []
                     }
                     
-                    # Store in database
+                    # Store in database and create mapped response data
                     for row_index, row_data in enumerate(table_data['rows']):
                         # Create line item
                         line_item = OCRLineItem(
@@ -592,6 +590,9 @@ def process_document_internal(doc_id, template_id):
                         )
                         db.session.add(line_item)
                         db.session.flush()  # Get the ID
+                        
+                        # Create mapped row data for response
+                        mapped_row_data = {}
                         
                         # Create line item values
                         for sub_field in sub_fields:
@@ -615,6 +616,9 @@ def process_document_internal(doc_id, template_id):
                                         else:
                                             print(f"No mapping found for SELECT sub-field '{sub_field.field_name.value}': '{value}'")
                                 
+                                # Store mapped value for response
+                                mapped_row_data[sub_field.field_name.value] = final_value
+                                
                                 line_item_value = OCRLineItemValue(
                                     ocr_items_id=line_item.ocr_items_id,
                                     sub_temp_field_id=sub_field.sub_temp_field_id,
@@ -623,7 +627,16 @@ def process_document_internal(doc_id, template_id):
                                 )
                                 db.session.add(line_item_value)
                         
+                        # Add mapped row to response data
+                        mapped_table_data['rows'].append(mapped_row_data)
                         line_item_records.append(line_item)
+                    
+                    # Store table data with mapped values for response
+                    table_data_results[table_field.field_id] = {
+                        'field_name': table_field.field_name.value,
+                        'sub_fields': sub_fields,
+                        'table_data': mapped_table_data
+                    }
 
         # 9. Save all OCR data to database
         # print("OCR data", ocr_data_records)
