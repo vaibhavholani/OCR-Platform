@@ -6,7 +6,8 @@ Configuration settings for Tally connector library.
 
 import os
 from pathlib import Path
-
+from dotenv import load_dotenv
+load_dotenv()
 
 class TallyConfig:
     """Configuration class for Tally connector settings."""
@@ -17,7 +18,10 @@ class TallyConfig:
     
     # Alternative library directories for different versions
     # _PARENT = Path(__file__).parent
-    _PARENT = "/home/sarohy/upwork/vaibhav/OCR-Platform/ocr_backend/app/tally"
+    # prefer an explicit environment override, otherwise use this file's parent directory
+    env_dir = os.environ.get("TALLY_PARENT_DIR")
+    _PARENT = str(Path(env_dir).expanduser().resolve())
+
 
     LEGACY_LIB_DIR = os.path.join(_PARENT, "tally_dll_files", "lib")
     LATEST_LIB_DIR = os.path.join(_PARENT, "tally_dll_files", "lib_new_name_space")

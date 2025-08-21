@@ -1,7 +1,9 @@
 from flask import Blueprint, jsonify, request
+from flask import current_app
 from .. import db
 from ..models import Template, TemplateField, SubTemplateField, FieldOption, SubTemplateFieldOption
 from ..utils.enums import FieldType, FieldName, DataType
+from ..tally import auto_load_tally_options, auto_load_tally_sub_field_options, TallyFieldOptionsError
 
 bp = Blueprint('templates', __name__, url_prefix='/api/templates')
 
@@ -100,6 +102,17 @@ def create_template_field(template_id):
     db.session.add(field)
     db.session.commit()
     
+    # Optionally auto-load Tally options for SELECT fields
+    try:
+        if field.field_type == FieldType.SELECT:
+            try:
+                auto_load_tally_options(field.field_id, clear_existing=True)
+            except TallyFieldOptionsError as e:
+                current_app.logger.warning(f"Auto-load Tally options failed for field {field.field_id}: {e}")
+    except Exception:
+        # Non-fatal: ensure API response is returned even if logging fails
+        pass
+
     return jsonify(field.to_dict()), 201
 
 @bp.route('/fields/<int:field_id>', methods=['GET'])
@@ -172,6 +185,16 @@ def create_sub_template_field(field_id):
     db.session.add(sub_field)
     db.session.commit()
     
+    # Optionally auto-load Tally options for SELECT sub-fields
+    try:
+        if sub_field.data_type == DataType.SELECT:
+            try:
+                auto_load_tally_sub_field_options(sub_field.sub_temp_field_id, clear_existing=True)
+            except TallyFieldOptionsError as e:
+                current_app.logger.warning(f"Auto-load Tally options failed for sub-field {sub_field.sub_temp_field_id}: {e}")
+    except Exception:
+        pass
+
     return jsonify(sub_field.to_dict()), 201
 
 @bp.route('/fields/<int:field_id>/options', methods=['GET'])

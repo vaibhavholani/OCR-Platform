@@ -32,6 +32,7 @@ class Config:
     
     # Gemini API configuration
     GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
+
     
     @staticmethod
     def init_app(app):
