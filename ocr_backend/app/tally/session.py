@@ -114,9 +114,13 @@ class TallySession(AbstractContextManager):
         
         # Initialize defaults
         self.request_options = None
+        self.master_request_options = None
+        self.post_request_options = None
         self._vouchers_available = False
+        self._units_available = False
         self._ledger_import_path = None
         self._stock_item_import_path = None
+        self._unit_import_path = None
         
         if self.version == "latest":
             # Latest version specific imports
@@ -138,9 +142,8 @@ class TallySession(AbstractContextManager):
                 logger.warning("Ledger not available from TallyConnectorNew.Core.Models in latest version")
                 
         elif self.version == "legacy":
-            # Legacy version doesn't have RequestOptions
-            self.request_options = None
-            logger.info("RequestOptions not available in legacy version")
+            # Legacy version RequestOptions setup
+            self._setup_legacy_request_options()
             
             # Legacy version uses Masters namespace
             try:
@@ -152,6 +155,9 @@ class TallySession(AbstractContextManager):
         
         # Common voucher-related imports (try both versions)
         self._load_voucher_functionality()
+        
+        # Load unit-related functionality
+        self._load_unit_functionality()
         
     def _load_voucher_functionality(self):
         """Load voucher-related classes and converters."""
@@ -207,6 +213,49 @@ class TallySession(AbstractContextManager):
             logger.warning("Voucher classes not available: %s", e)
             self._vouchers_available = False
 
+    def _setup_legacy_request_options(self):
+        """Setup RequestOptions for legacy version."""
+        try:
+            from TallyConnector.Core.Models import (  # type: ignore
+                RequestOptions,
+                MasterRequestOptions,
+                PostRequestOptions
+            )
+            
+            self.request_options = RequestOptions()
+            self.master_request_options = MasterRequestOptions()
+            self.post_request_options = PostRequestOptions()
+            logger.info("RequestOptions loaded for legacy version")
+            
+        except ImportError as e:
+            logger.warning("RequestOptions not available in legacy version: %s", e)
+            self.request_options = None
+            self.master_request_options = None
+            self.post_request_options = None
+
+    def _load_unit_functionality(self):
+        """Load unit-related classes and functionality."""
+        try:
+            from TallyConnector.Core.Models.Masters.Inventory import Unit  # type: ignore
+            from TallyConnector.Core.Models import Action  # type: ignore
+            from TallyConnector.Core.Converters.XMLConverterHelpers import TallyYesNo  # type: ignore
+            
+            # Store unit classes for use in unit creation
+            self._unit_classes = {
+                'Unit': Unit,
+                'Action': Action,
+                'TallyYesNo': TallyYesNo
+            }
+            
+            # Set unit import path for dynamic imports
+            self._unit_import_path = "TallyConnector.Core.Models.Masters.Inventory"
+            self._units_available = True
+            logger.info("Unit functionality loaded successfully")
+            
+        except ImportError as e:
+            logger.warning("Unit classes not available: %s", e)
+            self._units_available = False
+
     # --------------------------------------------------------------------- API
 
     # basic CRUD helpers -------------------------------------------------------
@@ -247,6 +296,43 @@ class TallySession(AbstractContextManager):
         else:
             # For legacy version without RequestOptions
             return self._svc.GetVouchersAsync().Result
+
+    def get_units(self, request_options: Any = None):
+        """Get units. Uses RequestOptions if available, otherwise uses default parameters."""
+        if not self._units_available:
+            raise RuntimeError("Unit functionality not available - check TallyConnector imports")
+            
+        if request_options is None and self.request_options is not None:
+            request_options = self.request_options
+            
+        # Import the Unit class to use as generic type parameter
+        Unit = self._unit_classes['Unit']
+        
+        if request_options is not None:
+            # Call the generic method with Unit type parameter
+            return self._svc.GetUnitsAsync[Unit](request_options).Result
+        else:
+            # Try calling without RequestOptions (should use default null)
+            return self._svc.GetUnitsAsync[Unit]().Result
+
+    def get_unit(self, unit_name: str, request_options: Any = None):
+        """Get specific unit by name."""
+        if not self._units_available:
+            raise RuntimeError("Unit functionality not available - check TallyConnector imports")
+            
+        if request_options is None and self.master_request_options is not None:
+            request_options = self.master_request_options
+            
+        if request_options is not None:
+            # GetUnitAsync might also be generic, try with Unit type
+            try:
+                Unit = self._unit_classes['Unit']
+                return self._svc.GetUnitAsync[Unit](unit_name, request_options).Result
+            except Exception:
+                # Fallback to non-generic call if the above fails
+                return self._svc.GetUnitAsync(unit_name, request_options).Result
+        else:
+            raise RuntimeError("MasterRequestOptions required for GetUnitAsync")
 
     def create_ledger(
         self,
@@ -482,6 +568,87 @@ class TallySession(AbstractContextManager):
         else:
             raise RuntimeError(f"StockItem creation not implemented for version '{self.version}'. Use legacy version.")
 
+    def create_unit(
+        self,
+        name: str,
+        *,
+        decimal_places: int = 0,
+        is_simple: bool = True,
+        base_unit: Optional[str] = None,
+        conversion: float = 1.0,
+        **kwargs,
+    ):
+        """
+        Create a new Unit of Measure.
+        
+        Parameters
+        ----------
+        name: str
+            Name/Symbol of the unit (e.g., "kg", "litre", "pcs")
+        decimal_places: int
+            Number of decimal places (0 to 4, default: 0)
+        is_simple: bool
+            True for simple units, False for compound units (default: True)
+        base_unit: str, optional
+            Base unit for compound units (required if is_simple=False)
+        conversion: float
+            Conversion factor for compound units (default: 1.0)
+        **kwargs:
+            Additional unit attributes
+            
+        Returns
+        -------
+        Response from Tally
+        """
+        if not self._units_available:
+            raise RuntimeError("Unit functionality not available - check TallyConnector imports")
+            
+        if self.version == "legacy":
+            try:
+                # Get classes from stored imports
+                Unit = self._unit_classes['Unit']
+                Action = self._unit_classes['Action']
+                TallyYesNo = self._unit_classes['TallyYesNo']
+                
+                unit = Unit()
+                unit.Name = name
+                unit.DecimalPlaces = decimal_places
+                unit.IsSimpleUnit = TallyYesNo(is_simple)
+                unit.Action = Action.Create
+                
+                # For compound units
+                if not is_simple:
+                    if not base_unit:
+                        raise ValueError("base_unit is required for compound units")
+                    unit.BaseUnit = base_unit
+                    unit.Conversion = conversion
+                
+                # Apply extra fields via **kwargs
+                for k, v in kwargs.items():
+                    if hasattr(unit, k):
+                        # Convert boolean values to TallyYesNo if needed
+                        if isinstance(v, bool) and k in ['IsGstExcluded']:
+                            v = TallyYesNo(v)
+                        setattr(unit, k, v)
+                    else:
+                        logger.warning("Unknown Unit attribute: %s", k)
+                
+                # Use PostRequestOptions if available
+                post_options = self.post_request_options
+                if post_options is not None:
+                    # PostUnitAsync is also generic
+                    resp = self._svc.PostUnitAsync[Unit](unit, post_options).Result
+                else:
+                    # Fallback without PostRequestOptions
+                    resp = self._svc.PostUnitAsync[Unit](unit).Result
+                    
+                return resp.Response if hasattr(resp, "Response") else resp
+                
+            except ImportError as e:
+                raise RuntimeError(f"Unit creation not available in legacy version: {e}")
+        else:
+            raise RuntimeError(f"Unit creation not implemented for version '{self.version}'. Use legacy version.")
+
     def get_version_info(self):
         """Get information about what features are available in the current version."""
         info = {
@@ -489,8 +656,12 @@ class TallySession(AbstractContextManager):
             "lib_dir": str(self.lib_dir),
             "host": self.host,
             "request_options_available": self.request_options is not None,
+            "master_request_options_available": self.master_request_options is not None,
+            "post_request_options_available": self.post_request_options is not None,
             "vouchers_available": self._vouchers_available,
+            "units_available": self._units_available,
             "ledger_import_path": self._ledger_import_path,
+            "unit_import_path": self._unit_import_path,
             "stock_item_available": self.version == "legacy"
         }
         return info

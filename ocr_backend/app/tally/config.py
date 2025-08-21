@@ -16,8 +16,8 @@ class TallyConfig:
     DEFAULT_HOST = "http://localhost:9000"
     
     # Alternative library directories for different versions
-    # _PARENT = Path(__file__).parent
-    _PARENT = "/home/sarohy/upwork/vaibhav/OCR-Platform/ocr_backend/app/tally"
+    _PARENT = Path(__file__).parent
+    # _PARENT = "/home/sarohy/upwork/vaibhav/OCR-Platform/ocr_backend/app/tally"
 
     LEGACY_LIB_DIR = os.path.join(_PARENT, "tally_dll_files", "lib")
     LATEST_LIB_DIR = os.path.join(_PARENT, "tally_dll_files", "lib_new_name_space")
@@ -32,6 +32,20 @@ class TallyConfig:
     DEFAULT_UNIT = "PCS"
     DEFAULT_GODOWN = "Main Location"
     DEFAULT_BATCH = "Primary Batch"
+    
+    # Common units and their properties for easy reference
+    COMMON_UNITS = {
+        'PCS': {'formal_name': 'Pieces', 'decimal_places': 0},
+        'KG': {'formal_name': 'Kilogram', 'decimal_places': 3},
+        'LITRE': {'formal_name': 'Litre', 'decimal_places': 2},
+        'METER': {'formal_name': 'Meter', 'decimal_places': 2},
+        'BOX': {'formal_name': 'Box', 'decimal_places': 0},
+        'SET': {'formal_name': 'Set', 'decimal_places': 0},
+        'PACK': {'formal_name': 'Pack', 'decimal_places': 0},
+        'BOTTLE': {'formal_name': 'Bottle', 'decimal_places': 0},
+        'GRAM': {'formal_name': 'Gram', 'decimal_places': 2},
+        'TON': {'formal_name': 'Ton', 'decimal_places': 3}
+    }
     
     # Sales and Purchase ledger defaults
     DEFAULT_SALES_LEDGER = "Sales Account"

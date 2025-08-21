@@ -7,16 +7,22 @@ from ..tally import (
     get_companies_list,
     get_ledgers_list,
     get_stock_items_list,
+    get_units_list,
     find_ledger_by_name,
     find_stock_item_by_name,
+    find_unit_by_name,
     create_ledger,
     create_stock_item,
+    create_simple_unit,
+    create_compound_unit,
+    update_unit,
     normalize_party_name,
     TallyConfig
 )
 import os
 from datetime import datetime
 from decimal import Decimal
+from typing import Dict
 import logging
 import re
 
@@ -209,7 +215,7 @@ def convert_ocr_to_tally_format(ocr_data):
         logger.error(f"Failed to convert OCR data to Tally format: {e}")
         raise ValueError(f"OCR to Tally conversion failed: {e}")
 
-def ensure_stock_item_exists(item_name, stock_group="Primary"):
+def ensure_stock_item_exists(item_name, stock_group="Primary", base_unit="PCS"):
     """
     Ensure stock item exists in Tally, create if it doesn't exist
     Returns the result of the operation
@@ -227,11 +233,21 @@ def ensure_stock_item_exists(item_name, stock_group="Primary"):
                     'message': f"Stock item '{item_name}' already exists in Tally"
                 }
         
-        # Step 2: Create stock item using default version if it doesn't exist
+        # Step 2: Ensure the unit exists before creating stock item
+        unit_result = ensure_unit_exists(base_unit)
+        if not unit_result['success']:
+            return {
+                'success': False,
+                'already_exists': False,
+                'item_name': item_name,
+                'message': f"Failed to ensure unit '{base_unit}' exists: {unit_result['message']}"
+            }
+        
+        # Step 3: Create stock item using default version if it doesn't exist
         with TallyConnector() as tally_default:
             item_data = {
                 "name": item_name,
-                "base_unit": "PCS",
+                "base_unit": base_unit,
                 "stock_group": stock_group
             }
             
@@ -242,7 +258,7 @@ def ensure_stock_item_exists(item_name, stock_group="Primary"):
                     'success': True,
                     'already_exists': False,
                     'item_name': create_result['item_name'],
-                    'message': f"Successfully created stock item '{item_name}' with base unit PCS"
+                    'message': f"Successfully created stock item '{item_name}' with base unit {base_unit}"
                 }
             else:
                 return {
@@ -313,6 +329,138 @@ def ensure_party_ledger_exists(party_name, ledger_group="Sundry Creditors"):
             'success': False,
             'already_exists': False,
             'ledger_name': party_name,
+            'message': error_msg
+        }
+
+def ensure_unit_exists(unit_name: str, decimal_places: int = 0, unit_type: str = "simple") -> Dict:
+    """
+    Ensure unit exists in Tally, create if it doesn't exist
+    Returns the result of the operation
+    """
+    try:
+        # Step 1: Check if unit exists using legacy version
+        with TallyConnector(version="legacy") as tally_latest:
+            existing_unit = find_unit_by_name(tally_latest, unit_name)
+            
+            if existing_unit:
+                return {
+                    'success': True,
+                    'already_exists': True,
+                    'unit_name': unit_name,
+                    'unit_type': 'simple' if existing_unit['is_simple_unit'] else 'compound',
+                    'decimal_places': existing_unit['decimal_places'],
+                    'message': f"Unit '{unit_name}' already exists in Tally"
+                }
+        
+        # Step 2: Create unit using legacy version if it doesn't exist
+        with TallyConnector(version="legacy") as tally_default:
+            unit_data = {
+                "name": unit_name,
+                "decimal_places": decimal_places
+            }
+            
+            # Import create_simple_unit function
+            from ..tally.data_insertion import create_simple_unit
+            create_result = create_simple_unit(tally_default, unit_data)
+            
+            if create_result['success']:
+                return {
+                    'success': True,
+                    'already_exists': False,
+                    'unit_name': create_result['unit_name'],
+                    'unit_type': create_result['unit_type'],
+                    'decimal_places': create_result['decimal_places'],
+                    'message': f"Successfully created unit '{unit_name}' with {decimal_places} decimal places"
+                }
+            else:
+                return {
+                    'success': False,
+                    'already_exists': False,
+                    'unit_name': unit_name,
+                    'message': f"Failed to create unit: {create_result.get('message', 'Unknown error')}"
+                }
+    
+    except Exception as e:
+        error_msg = f"Error in ensure_unit_exists: {e}"
+        logger.error(error_msg)
+        return {
+            'success': False,
+            'already_exists': False,
+            'unit_name': unit_name,
+            'message': error_msg
+        }
+
+def ensure_compound_unit_exists(unit_name: str, base_unit: str, conversion: float, decimal_places: int = 0) -> Dict:
+    """
+    Ensure compound unit exists in Tally, create if it doesn't exist
+    Returns the result of the operation
+    """
+    try:
+        # Step 1: Check if unit exists
+        with TallyConnector(version="legacy") as tally_latest:
+            existing_unit = find_unit_by_name(tally_latest, unit_name)
+            
+            if existing_unit:
+                return {
+                    'success': True,
+                    'already_exists': True,
+                    'unit_name': unit_name,
+                    'unit_type': 'simple' if existing_unit['is_simple_unit'] else 'compound',
+                    'base_unit': existing_unit.get('base_unit', ''),
+                    'conversion': existing_unit.get('conversion', 1.0),
+                    'decimal_places': existing_unit['decimal_places'],
+                    'message': f"Compound unit '{unit_name}' already exists in Tally"
+                }
+        
+        # Step 2: Ensure base unit exists first
+        base_unit_result = ensure_unit_exists(base_unit)
+        if not base_unit_result['success']:
+            return {
+                'success': False,
+                'already_exists': False,
+                'unit_name': unit_name,
+                'message': f"Failed to ensure base unit '{base_unit}' exists: {base_unit_result['message']}"
+            }
+        
+        # Step 3: Create compound unit
+        with TallyConnector(version="legacy") as tally_default:
+            unit_data = {
+                "name": unit_name,
+                "base_unit": base_unit,
+                "conversion": conversion,
+                "decimal_places": decimal_places
+            }
+            
+            # Import create_compound_unit function
+            from ..tally.data_insertion import create_compound_unit
+            create_result = create_compound_unit(tally_default, unit_data)
+            
+            if create_result['success']:
+                return {
+                    'success': True,
+                    'already_exists': False,
+                    'unit_name': create_result['unit_name'],
+                    'unit_type': create_result['unit_type'],
+                    'base_unit': create_result['base_unit'],
+                    'conversion': create_result['conversion'],
+                    'decimal_places': create_result['decimal_places'],
+                    'message': f"Successfully created compound unit '{unit_name}' = {conversion} {base_unit}"
+                }
+            else:
+                return {
+                    'success': False,
+                    'already_exists': False,
+                    'unit_name': unit_name,
+                    'message': f"Failed to create compound unit: {create_result.get('message', 'Unknown error')}"
+                }
+    
+    except Exception as e:
+        error_msg = f"Error in ensure_compound_unit_exists: {e}"
+        logger.error(error_msg)
+        return {
+            'success': False,
+            'already_exists': False,
+            'unit_name': unit_name,
             'message': error_msg
         }
 
@@ -782,5 +930,283 @@ def ensure_party_ledger():
         return jsonify({
             'success': False,
             'message': f'Failed to ensure party ledger exists: {str(e)}',
+            'error': str(e)
+        }), 500
+
+# =============================================================================
+# UNIT OF MEASURE (UOM) ROUTES
+# =============================================================================
+
+@bp.route('/units', methods=['GET'])
+def get_units():
+    """Get list of units of measure from Tally."""
+    try:
+        with TallyConnector(version="legacy") as tally:
+            units = get_units_list(tally)
+            return jsonify({
+                'success': True,
+                'units': units,
+                'count': len(units)
+            })
+            
+    except Exception as e:
+        logger.error(f"Failed to get units: {e}")
+        return jsonify({
+            'success': False,
+            'message': f'Failed to get units: {str(e)}',
+            'error': str(e)
+        }), 500
+
+@bp.route('/units/<string:unit_name>', methods=['GET'])
+def get_unit(unit_name):
+    """Get specific unit by name from Tally."""
+    try:
+        with TallyConnector(version="legacy") as tally:
+            unit = find_unit_by_name(tally, unit_name)
+            
+            if unit:
+                return jsonify({
+                    'success': True,
+                    'unit': unit
+                })
+            else:
+                return jsonify({
+                    'success': False,
+                    'message': f'Unit "{unit_name}" not found'
+                }), 404
+            
+    except Exception as e:
+        logger.error(f"Failed to get unit {unit_name}: {e}")
+        return jsonify({
+            'success': False,
+            'message': f'Failed to get unit: {str(e)}',
+            'error': str(e)
+        }), 500
+
+@bp.route('/units', methods=['POST'])
+def create_unit():
+    """Create a new unit of measure in Tally."""
+    try:
+        data = request.get_json()
+        
+        if not data or 'name' not in data:
+            return jsonify({'error': 'Unit name is required'}), 400
+        
+        # Validate decimal places
+        decimal_places = data.get('decimal_places', 0)
+        if not isinstance(decimal_places, int) or decimal_places < 0 or decimal_places > 4:
+            return jsonify({'error': 'Decimal places must be an integer between 0 and 4'}), 400
+        
+        # Determine unit type
+        is_compound = 'base_unit' in data and 'conversion' in data
+        
+        if is_compound:
+            # Create compound unit
+            required_fields = ['name', 'base_unit', 'conversion']
+            for field in required_fields:
+                if field not in data:
+                    return jsonify({'error': f'{field} is required for compound units'}), 400
+            
+            if not isinstance(data['conversion'], (int, float)) or data['conversion'] <= 0:
+                return jsonify({'error': 'Conversion must be a positive number'}), 400
+            
+            unit_data = {
+                'name': data['name'],
+                'base_unit': data['base_unit'],
+                'conversion': data['conversion'],
+                'decimal_places': decimal_places
+            }
+            
+            with TallyConnector(version="legacy") as tally:
+                result = create_compound_unit(tally, unit_data)
+        else:
+            # Create simple unit
+            unit_data = {
+                'name': data['name'],
+                'decimal_places': decimal_places
+            }
+            
+            with TallyConnector(version="legacy") as tally:
+                result = create_simple_unit(tally, unit_data)
+        
+        if result['success']:
+            return jsonify(result), 201
+        else:
+            return jsonify(result), 500
+            
+    except Exception as e:
+        logger.error(f"Failed to create unit: {e}")
+        return jsonify({
+            'success': False,
+            'message': f'Failed to create unit: {str(e)}',
+            'error': str(e)
+        }), 500
+
+@bp.route('/units/<string:unit_name>', methods=['PUT'])
+def update_unit_route(unit_name):
+    """Update an existing unit of measure in Tally."""
+    try:
+        data = request.get_json()
+        
+        if not data:
+            return jsonify({'error': 'Update data is required'}), 400
+        
+        # Validate decimal places if provided
+        if 'decimal_places' in data:
+            decimal_places = data['decimal_places']
+            if not isinstance(decimal_places, int) or decimal_places < 0 or decimal_places > 4:
+                return jsonify({'error': 'Decimal places must be an integer between 0 and 4'}), 400
+        
+        # Validate conversion if provided
+        if 'conversion' in data:
+            if not isinstance(data['conversion'], (int, float)) or data['conversion'] <= 0:
+                return jsonify({'error': 'Conversion must be a positive number'}), 400
+        
+        with TallyConnector(version="legacy") as tally:
+            result = update_unit(tally, unit_name, data)
+        
+        if result['success']:
+            return jsonify(result)
+        else:
+            return jsonify(result), 500
+            
+    except Exception as e:
+        logger.error(f"Failed to update unit {unit_name}: {e}")
+        return jsonify({
+            'success': False,
+            'message': f'Failed to update unit: {str(e)}',
+            'error': str(e)
+        }), 500
+
+@bp.route('/units/<string:unit_name>', methods=['DELETE'])
+def delete_unit(unit_name):
+    """Delete a unit of measure from Tally."""
+    try:
+        # Note: Tally typically doesn't support deleting units that are in use
+        # This is a placeholder implementation
+        return jsonify({
+            'success': False,
+            'message': 'Unit deletion is not supported in this version. Units should be made inactive instead.',
+            'suggestion': 'Use PUT /units/{unit_name} with {"is_active": false} to deactivate the unit'
+        }), 501  # Not Implemented
+            
+    except Exception as e:
+        logger.error(f"Failed to delete unit {unit_name}: {e}")
+        return jsonify({
+            'success': False,
+            'message': f'Failed to delete unit: {str(e)}',
+            'error': str(e)
+        }), 500
+
+@bp.route('/units/ensure_exists', methods=['POST'])
+def ensure_unit():
+    """Ensure unit exists in Tally, create if it doesn't exist."""
+    try:
+        data = request.get_json()
+        
+        if not data or 'unit_name' not in data:
+            return jsonify({'error': 'unit_name is required'}), 400
+        
+        unit_name = data['unit_name']
+        decimal_places = data.get('decimal_places', 0)
+        
+        # Check if this is a compound unit request
+        if 'base_unit' in data and 'conversion' in data:
+            # Ensure compound unit
+            base_unit = data['base_unit']
+            conversion = data['conversion']
+            
+            if not isinstance(conversion, (int, float)) or conversion <= 0:
+                return jsonify({'error': 'Conversion must be a positive number'}), 400
+            
+            result = ensure_compound_unit_exists(unit_name, base_unit, conversion, decimal_places)
+        else:
+            # Ensure simple unit
+            result = ensure_unit_exists(unit_name, decimal_places)
+        
+        if result['success']:
+            return jsonify(result)
+        else:
+            return jsonify(result), 500
+            
+    except Exception as e:
+        logger.error(f"Failed to ensure unit exists: {e}")
+        return jsonify({
+            'success': False,
+            'message': f'Failed to ensure unit exists: {str(e)}',
+            'error': str(e)
+        }), 500
+
+@bp.route('/units/common', methods=['GET'])
+def get_common_units():
+    """Get list of common units predefined in the system."""
+    try:
+        common_units = []
+        for unit_name, properties in TallyConfig.COMMON_UNITS.items():
+            common_units.append({
+                'name': unit_name,
+                'formal_name': properties['formal_name'],
+                'decimal_places': properties['decimal_places'],
+                'is_simple': True
+            })
+        
+        return jsonify({
+            'success': True,
+            'common_units': common_units,
+            'count': len(common_units)
+        })
+        
+    except Exception as e:
+        logger.error(f"Failed to get common units: {e}")
+        return jsonify({
+            'success': False,
+            'message': f'Failed to get common units: {str(e)}',
+            'error': str(e)
+        }), 500
+
+@bp.route('/units/common/create_all', methods=['POST'])
+def create_all_common_units():
+    """Create all common units in Tally if they don't exist."""
+    try:
+        results = []
+        success_count = 0
+        error_count = 0
+        
+        for unit_name, properties in TallyConfig.COMMON_UNITS.items():
+            try:
+                result = ensure_unit_exists(unit_name, properties['decimal_places'])
+                results.append({
+                    'unit_name': unit_name,
+                    'result': result
+                })
+                
+                if result['success']:
+                    success_count += 1
+                else:
+                    error_count += 1
+                    
+            except Exception as e:
+                error_count += 1
+                results.append({
+                    'unit_name': unit_name,
+                    'result': {
+                        'success': False,
+                        'message': str(e)
+                    }
+                })
+        
+        return jsonify({
+            'success': error_count == 0,
+            'message': f'Processed {len(TallyConfig.COMMON_UNITS)} units: {success_count} successful, {error_count} failed',
+            'success_count': success_count,
+            'error_count': error_count,
+            'results': results
+        })
+        
+    except Exception as e:
+        logger.error(f"Failed to create common units: {e}")
+        return jsonify({
+            'success': False,
+            'message': f'Failed to create common units: {str(e)}',
             'error': str(e)
         }), 500 

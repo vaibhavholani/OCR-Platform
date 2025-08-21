@@ -332,3 +332,216 @@ def _parse_date(date_input: Any) -> datetime:
         raise ValueError(f"Unable to parse date: {date_input}")
     else:
         raise ValueError(f"Invalid date type: {type(date_input)}")
+
+
+def create_simple_unit(connector: TallyConnector, unit_data: Dict) -> Dict:
+    """
+    Create a simple unit of measure in Tally.
+    
+    Args:
+        connector: Active TallyConnector instance
+        unit_data: Dictionary containing unit information
+            Required: name
+            Optional: decimal_places (default: 0)
+            
+    Returns:
+        Dictionary with creation result and unit details
+        
+    Raises:
+        TallyConnectorError: If creation fails
+    """
+    try:
+        # Validate required fields
+        if 'name' not in unit_data:
+            raise ValueError("Unit name is required")
+        
+        name = unit_data['name']
+        decimal_places = unit_data.get('decimal_places', 0)
+        
+        # Validate decimal places (0-4 allowed in Tally)
+        if not isinstance(decimal_places, int) or decimal_places < 0 or decimal_places > 4:
+            raise ValueError("Decimal places must be an integer between 0 and 4")
+        
+        # Create unit using TallySession
+        response = connector.session.create_unit(
+            name=name,
+            decimal_places=decimal_places,
+            is_simple=True
+        )
+        
+        result = {
+            'success': True,
+            'message': f"Simple unit '{name}' created successfully",
+            'unit_name': name,
+            'unit_type': 'simple',
+            'decimal_places': decimal_places,
+            'response': response
+        }
+        
+        logger.info(f"Created simple unit: {name}")
+        return result
+        
+    except Exception as e:
+        logger.error(f"Failed to create simple unit {unit_data.get('name', 'Unknown')}: {e}")
+        raise TallyConnectorError(f"Simple unit creation failed: {e}")
+
+
+def create_compound_unit(connector: TallyConnector, unit_data: Dict) -> Dict:
+    """
+    Create a compound unit of measure in Tally.
+    
+    Args:
+        connector: Active TallyConnector instance
+        unit_data: Dictionary containing compound unit information
+            Required: name, base_unit, conversion
+            Optional: decimal_places (default: 0)
+            
+    Returns:
+        Dictionary with creation result and unit details
+        
+    Raises:
+        TallyConnectorError: If creation fails
+    """
+    try:
+        # Validate required fields
+        required_fields = ['name', 'base_unit', 'conversion']
+        for field in required_fields:
+            if field not in unit_data:
+                raise ValueError(f"Required field '{field}' is missing")
+        
+        name = unit_data['name']
+        base_unit = unit_data['base_unit']
+        conversion = unit_data['conversion']
+        decimal_places = unit_data.get('decimal_places', 0)
+        
+        # Validate fields
+        if not isinstance(decimal_places, int) or decimal_places < 0 or decimal_places > 4:
+            raise ValueError("Decimal places must be an integer between 0 and 4")
+            
+        if not isinstance(conversion, (int, float)) or conversion <= 0:
+            raise ValueError("Conversion factor must be a positive number")
+        
+        # Verify base unit exists (simple validation)
+        from .data_retrieval import find_unit_by_name
+        base_unit_exists = find_unit_by_name(connector, base_unit)
+        if not base_unit_exists:
+            logger.warning(f"Base unit '{base_unit}' not found. Creating compound unit anyway.")
+        
+        # Create compound unit using TallySession
+        response = connector.session.create_unit(
+            name=name,
+            decimal_places=decimal_places,
+            is_simple=False,
+            base_unit=base_unit,
+            conversion=float(conversion)
+        )
+        
+        result = {
+            'success': True,
+            'message': f"Compound unit '{name}' created successfully ({conversion} {base_unit})",
+            'unit_name': name,
+            'unit_type': 'compound',
+            'base_unit': base_unit,
+            'conversion': float(conversion),
+            'decimal_places': decimal_places,
+            'response': response
+        }
+        
+        logger.info(f"Created compound unit: {name} = {conversion} {base_unit}")
+        return result
+        
+    except Exception as e:
+        logger.error(f"Failed to create compound unit {unit_data.get('name', 'Unknown')}: {e}")
+        raise TallyConnectorError(f"Compound unit creation failed: {e}")
+
+
+def create_unit(connector: TallyConnector, unit_data: Dict) -> Dict:
+    """
+    Create a unit of measure in Tally (auto-detects simple vs compound).
+    
+    Args:
+        connector: Active TallyConnector instance
+        unit_data: Dictionary containing unit information
+            Required: name
+            Optional: decimal_places, base_unit, conversion
+            
+    Returns:
+        Dictionary with creation result and unit details
+        
+    Raises:
+        TallyConnectorError: If creation fails
+    """
+    try:
+        # Auto-detect unit type based on provided data
+        has_base_unit = 'base_unit' in unit_data and unit_data['base_unit']
+        has_conversion = 'conversion' in unit_data and unit_data['conversion']
+        
+        if has_base_unit and has_conversion:
+            # This is a compound unit
+            return create_compound_unit(connector, unit_data)
+        else:
+            # This is a simple unit
+            return create_simple_unit(connector, unit_data)
+            
+    except Exception as e:
+        logger.error(f"Failed to create unit {unit_data.get('name', 'Unknown')}: {e}")
+        raise TallyConnectorError(f"Unit creation failed: {e}")
+
+
+def update_unit(connector: TallyConnector, unit_name: str, updates: Dict) -> Dict:
+    """
+    Update an existing unit in Tally.
+    
+    Args:
+        connector: Active TallyConnector instance
+        unit_name: Name of the unit to update
+        updates: Dictionary containing fields to update
+        
+    Returns:
+        Dictionary with update result
+        
+    Raises:
+        TallyConnectorError: If update fails
+    """
+    try:
+        # First check if unit exists
+        from .data_retrieval import find_unit_by_name
+        existing_unit = find_unit_by_name(connector, unit_name)
+        
+        if not existing_unit:
+            raise ValueError(f"Unit '{unit_name}' not found")
+        
+        # Prepare update data
+        unit_data = {
+            'name': unit_name,
+            'decimal_places': updates.get('decimal_places', existing_unit['decimal_places']),
+        }
+        
+        # Handle unit type changes (not recommended but possible)
+        if 'base_unit' in updates or 'conversion' in updates:
+            unit_data['base_unit'] = updates.get('base_unit', existing_unit['base_unit'])
+            unit_data['conversion'] = updates.get('conversion', existing_unit['conversion'])
+        
+        # Use create_unit with Action.Alter (handled automatically by session)
+        response = connector.session.create_unit(
+            name=unit_name,
+            decimal_places=unit_data['decimal_places'],
+            is_simple=existing_unit['is_simple_unit'],
+            base_unit=unit_data.get('base_unit'),
+            conversion=unit_data.get('conversion', 1.0)
+        )
+        
+        result = {
+            'success': True,
+            'message': f"Unit '{unit_name}' updated successfully",
+            'unit_name': unit_name,
+            'updates_applied': updates,
+            'response': response
+        }
+        
+        logger.info(f"Updated unit: {unit_name}")
+        return result
+        
+    except Exception as e:
+        logger.error(f"Failed to update unit {unit_name}: {e}")
+        raise TallyConnectorError(f"Unit update failed: {e}")
