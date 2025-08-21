@@ -39,7 +39,7 @@ def reconstruct_table_data_from_db(document_id):
             row_data = {}
             for value in line_item.ocr_line_item_values:
                 if value.sub_template_field:
-                    row_data[value.sub_template_field.field_name.value] = value.predicted_value or value.actual_value
+                    row_data[value.sub_template_field.field_name.value] = value.actual_value or value.predicted_value
             rows.append(row_data)
         
         # Format columns info
@@ -427,7 +427,7 @@ def get_document_ocr_results(document_id):
         # Format extracted data (text fields)
         extracted_data = {}
         for ocr, field in ocr_data:
-            extracted_data[field.field_name.value] = ocr.predicted_value or ocr.actual_value
+            extracted_data[field.field_name.value] = ocr.actual_value or ocr.predicted_value
         
         # Get formatted table data
         table_data = reconstruct_table_data_from_db(document_id)
@@ -482,3 +482,132 @@ def reprocess_document(document_id):
     except Exception as e:
         current_app.logger.error(f"Error reprocessing document: {str(e)}")
         return jsonify({'error': 'Failed to reprocess document'}), 500 
+
+@bp.route('/<int:document_id>/update-field-value', methods=['POST'])
+def update_field_value(document_id):
+    """Update a single field's actual_value when user edits OCR data"""
+    try:
+        data = request.get_json()
+        
+        if not data or 'field_name' not in data or 'value' not in data:
+            return jsonify({'error': 'Missing required fields: field_name and value'}), 400
+        
+        field_name = data['field_name']
+        new_value = data['value']
+        
+        # Convert field_name to proper enum value
+        # Frontend sends lowercase field names, but DB stores enum values
+        from ..utils.enums import FieldName
+        
+        # Try to find matching enum value
+        matching_enum = None
+        for enum_val in FieldName:
+            if enum_val.value.lower() == field_name.lower():
+                matching_enum = enum_val
+                break
+        
+        if not matching_enum:
+            return jsonify({'error': f'Invalid field name: {field_name}'}), 400
+        
+        # Find the OCR record by document_id and enum field_name
+        ocr_record = db.session.query(OCRData).join(TemplateField).filter(
+            OCRData.document_id == document_id,
+            TemplateField.field_name == matching_enum
+        ).first()
+        
+        if ocr_record:
+            # Update the actual_value (user correction)
+            ocr_record.actual_value = new_value
+            db.session.commit()
+            
+            current_app.logger.info(f"Updated field '{field_name}' for document {document_id}: '{new_value}'")
+            
+            return jsonify({
+                'success': True,
+                'field_name': field_name,
+                'new_value': new_value,
+                'ocr_id': ocr_record.ocr_id
+            })
+        else:
+            current_app.logger.warning(f"OCR record not found for field '{field_name}' in document {document_id}")
+            return jsonify({'error': f'OCR record not found for field: {field_name}'}), 404
+            
+    except Exception as e:
+        current_app.logger.error(f"Error updating field value: {str(e)}")
+        return jsonify({'error': f'Failed to update field value: {str(e)}'}), 500 
+
+@bp.route('/<int:document_id>/update-table-cell-value', methods=['POST'])
+def update_table_cell_value(document_id):
+    """Update a single table cell's actual_value when user edits OCR data"""
+    try:
+        data = request.get_json()
+        
+        if not data or not all(k in data for k in ('field_name', 'row_index', 'column_name', 'value')):
+            return jsonify({'error': 'Missing required fields: field_name, row_index, column_name, and value'}), 400
+        
+        field_name = data['field_name']
+        row_index = data['row_index']
+        column_name = data['column_name']
+        new_value = data['value']
+        
+        # Convert field_name to proper enum value
+        from ..utils.enums import FieldName
+        
+        # Try to find matching enum value for table field
+        matching_enum = None
+        for enum_val in FieldName:
+            if enum_val.value.lower() == field_name.lower():
+                matching_enum = enum_val
+                break
+        
+        if not matching_enum:
+            return jsonify({'error': f'Invalid field name: {field_name}'}), 400
+        
+        # Convert column_name to proper enum value
+        matching_column_enum = None
+        for enum_val in FieldName:
+            if enum_val.value.lower() == column_name.lower():
+                matching_column_enum = enum_val
+                break
+        
+        if not matching_column_enum:
+            return jsonify({'error': f'Invalid column name: {column_name}'}), 400
+        
+        # Find the line item and its value
+        line_item = db.session.query(OCRLineItem).join(TemplateField).filter(
+            OCRLineItem.document_id == document_id,
+            TemplateField.field_name == matching_enum,
+            OCRLineItem.row_index == row_index
+        ).first()
+        
+        if not line_item:
+            return jsonify({'error': f'Line item not found for row {row_index}'}), 404
+        
+        # Find the specific cell value
+        cell_value = db.session.query(OCRLineItemValue).join(SubTemplateField).filter(
+            OCRLineItemValue.ocr_items_id == line_item.ocr_items_id,
+            SubTemplateField.field_name == matching_column_enum
+        ).first()
+        
+        if cell_value:
+            # Update the actual_value (user correction)
+            cell_value.actual_value = new_value
+            db.session.commit()
+            
+            current_app.logger.info(f"Updated table cell '{field_name}.{column_name}' row {row_index} for document {document_id}: '{new_value}'")
+            
+            return jsonify({
+                'success': True,
+                'field_name': field_name,
+                'column_name': column_name,
+                'row_index': row_index,
+                'new_value': new_value,
+                'ocr_items_value_id': cell_value.ocr_items_value_id
+            })
+        else:
+            current_app.logger.warning(f"Table cell value not found for '{field_name}.{column_name}' row {row_index} in document {document_id}")
+            return jsonify({'error': f'Table cell value not found for: {field_name}.{column_name} row {row_index}'}), 404
+            
+    except Exception as e:
+        current_app.logger.error(f"Error updating table cell value: {str(e)}")
+        return jsonify({'error': f'Failed to update table cell value: {str(e)}'}), 500 
