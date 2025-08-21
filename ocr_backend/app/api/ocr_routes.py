@@ -3,6 +3,11 @@ from .. import db
 from ..models import OCRData, OCRLineItem, OCRLineItemValue, Document, TemplateField, SubTemplateField, Template, FieldOption, SubTemplateFieldOption
 from ..utils.gemini_ocr import call_gemini_ocr, parse_gemini_response
 from ..utils.enums import DocumentStatus, FieldType, DataType
+from ..utils.data_conversion import (
+    safe_convert_template_field_value, 
+    safe_convert_sub_template_field_value,
+    DataConversionError
+)
 from ..tally import (
     auto_load_tally_options, 
     load_companies_as_options, 
@@ -530,8 +535,15 @@ def process_document_internal(doc_id, template_id):
             for field in text_fields:
                 field_value = extracted_fields.get(field.field_name.value)
                 if field_value is not None:
-                    #Map SELECT field values to predefined options
-                    final_value = field_value
+                    # Step 1: Apply data type conversion
+                    converted_value, conversion_error = safe_convert_template_field_value(
+                        field_value, 
+                        field.field_type, 
+                        field.field_name.value
+                    )
+                    
+                    # Step 2: Map SELECT field values to predefined options (after conversion)
+                    final_value = converted_value
                     original_value = str(field_value)
                     was_mapped = False
                     
@@ -541,16 +553,16 @@ def process_document_internal(doc_id, template_id):
                         if field_options:
                             # Use fuzzy matching + LLM to map the value
                             mapped_value = map_select_field_value(
-                                str(field_value), 
+                                str(converted_value), 
                                 field_options, 
                                 field.field_name.value
                             )
                             if mapped_value is not None:
                                 final_value = mapped_value
                                 was_mapped = True
-                                print(f"Mapped SELECT field '{field.field_name.value}': '{field_value}' -> '{final_value}'")
+                                print(f"Mapped SELECT field '{field.field_name.value}': '{converted_value}' -> '{final_value}'")
                             else:
-                                print(f"No mapping found for SELECT field '{field.field_name.value}': '{field_value}'")
+                                print(f"No mapping found for SELECT field '{field.field_name.value}': '{converted_value}'")
                     
                     ocr_data = OCRData(
                         document_id=doc_id,
@@ -561,9 +573,11 @@ def process_document_internal(doc_id, template_id):
                     ocr_data_records.append(ocr_data)
                     extracted_data[field.field_name.value] = final_value
                     
-                    # Add mapping metadata for SELECT fields
+                    # Add metadata for field processing
+                    extracted_data[f"{field.field_name.value}_original"] = original_value
+                    if conversion_error:
+                        extracted_data[f"{field.field_name.value}_conversion_error"] = conversion_error
                     if field.field_type == FieldType.SELECT:
-                        extracted_data[f"{field.field_name.value}_original"] = original_value
                         extracted_data[f"{field.field_name.value}_mapped"] = was_mapped
 
         # 8. Process table fields
@@ -610,8 +624,15 @@ def process_document_internal(doc_id, template_id):
                         for sub_field in sub_fields:
                             value = row_data.get(sub_field.field_name.value)
                             if value is not None:
-                                # Map SELECT sub-field values to predefined options
-                                final_value = value
+                                # Step 1: Apply data type conversion
+                                converted_value, conversion_error = safe_convert_sub_template_field_value(
+                                    value,
+                                    sub_field.data_type,
+                                    sub_field.field_name.value
+                                )
+                                
+                                # Step 2: Map SELECT sub-field values to predefined options (after conversion)
+                                final_value = converted_value
                                 original_value = str(value)
                                 was_mapped = False
                                 
@@ -621,23 +642,25 @@ def process_document_internal(doc_id, template_id):
                                     if sub_field_options:
                                         # Use fuzzy matching + LLM to map the value
                                         mapped_value = map_select_field_value(
-                                            str(value), 
+                                            str(converted_value), 
                                             sub_field_options, 
                                             sub_field.field_name.value
                                         )
                                         if mapped_value is not None:
                                             final_value = mapped_value
                                             was_mapped = True
-                                            print(f"Mapped SELECT sub-field '{sub_field.field_name.value}': '{value}' -> '{final_value}'")
+                                            print(f"Mapped SELECT sub-field '{sub_field.field_name.value}': '{converted_value}' -> '{final_value}'")
                                         else:
-                                            print(f"No mapping found for SELECT sub-field '{sub_field.field_name.value}': '{value}'")
+                                            print(f"No mapping found for SELECT sub-field '{sub_field.field_name.value}': '{converted_value}'")
                                 
                                 # Store mapped value for response
                                 mapped_row_data[sub_field.field_name.value] = final_value
                                 
-                                # Add mapping metadata for SELECT fields
+                                # Add metadata for field processing
+                                mapped_row_data[f"{sub_field.field_name.value}_original"] = original_value
+                                if conversion_error:
+                                    mapped_row_data[f"{sub_field.field_name.value}_conversion_error"] = conversion_error
                                 if sub_field.data_type == DataType.SELECT:
-                                    mapped_row_data[f"{sub_field.field_name.value}_original"] = original_value
                                     mapped_row_data[f"{sub_field.field_name.value}_mapped"] = was_mapped
                                 
                                 line_item_value = OCRLineItemValue(
