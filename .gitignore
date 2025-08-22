@@ -8,3 +8,6 @@ PROMPT.py
 settings.json
 .env
 .vscode 
+__pycache__/
+*.py[cod]
+*$py.class
