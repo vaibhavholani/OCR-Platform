@@ -46,6 +46,7 @@ from .tally_field_options import (
     load_companies_as_options,
     load_ledgers_as_options,
     load_stock_items_as_options,
+    load_units_as_options,
     auto_load_tally_options,
     refresh_field_options,
     get_field_options_summary,
@@ -54,6 +55,7 @@ from .tally_field_options import (
     load_all_ledger_options,
     load_stock_items_as_sub_field_options,
     load_ledgers_as_sub_field_options,
+    load_units_as_sub_field_options,
     auto_load_tally_sub_field_options,
     TallyFieldOptionsError
 )
@@ -90,6 +92,7 @@ __all__ = [
     'load_companies_as_options',
     'load_ledgers_as_options',
     'load_stock_items_as_options',
+    'load_units_as_options',
     'auto_load_tally_options',
     'refresh_field_options',
     'get_field_options_summary',
@@ -98,7 +101,8 @@ __all__ = [
     'load_all_ledger_options',
     # Sub-Field Options
     'load_stock_items_as_sub_field_options',
-    'load_ledgers_as_sub_field_options', 
+    'load_ledgers_as_sub_field_options',
+    'load_units_as_sub_field_options', 
     'auto_load_tally_sub_field_options',
     'TallyFieldOptionsError'
 ]
