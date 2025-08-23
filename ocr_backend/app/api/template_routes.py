@@ -22,6 +22,15 @@ def get_template(template_id):
     template = Template.query.get_or_404(template_id)
     return jsonify(template.to_dict())
 
+@bp.route('/names', methods=['GET'])
+def get_template_names():
+    """Get only template names and IDs"""
+    templates = Template.query.all()
+    return jsonify({
+        'templates': [{'temp_id': template.temp_id, 'name': template.name} for template in templates],
+        'count': len(templates)
+    })
+
 @bp.route('/', methods=['POST'])
 def create_template():
     """Create a new template"""
