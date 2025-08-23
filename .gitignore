@@ -8,3 +8,4 @@ PROMPT.py
 settings.json
 .env
 .vscode 
+test_*

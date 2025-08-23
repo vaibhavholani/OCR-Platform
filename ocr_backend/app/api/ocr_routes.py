@@ -55,13 +55,25 @@ def map_select_field_value(ocr_value, field_options, field_name):
         ocr_value, 
         option_labels, 
         scorer=fuzz.WRatio,  # Use weighted ratio for better matching
-        score_cutoff=40,     # Increased minimum similarity score
+        score_cutoff=75,     # Increased minimum similarity score
         limit=5              # Top 5 matches
     )
-    
+    from flask import current_app
+
     # If no decent matches found, return None (no mapping found)
     if not fuzzy_matches:
+        
+        current_app.logger.info(f"SELECT field mapping - NO MATCHES: '{ocr_value}' for field '{field_name}' (no options above 75% similarity)")
         return None
+    
+    # Check for high confidence match (90%+) - auto-match without LLM
+    best_match, best_score = fuzzy_matches[0]
+    if best_score >= 90:
+        # Find corresponding option value and return directly
+        matching_option = next((opt for opt in field_options if opt.option_label == best_match), None)
+        if matching_option:
+            current_app.logger.info(f"SELECT field mapping - AUTO-MATCH: '{ocr_value}' -> '{matching_option.option_value}' ({best_score}% confidence) for field '{field_name}'")
+            return matching_option.option_value
     
     # Build LLM prompt for final selection
     match_options = []
@@ -102,7 +114,6 @@ Response (return only the option value or "NONE"):
     try:
         # Call Gemini for final selection - text only
         from google import genai
-        from flask import current_app
         
         # Get API key
         api_key = current_app.config.get('GEMINI_API_KEY')
@@ -117,7 +128,7 @@ Response (return only the option value or "NONE"):
         client = genai.Client(api_key=api_key)
         
         # Log the mapping attempt
-        current_app.logger.info(f"Mapping SELECT field '{field_name}': '{ocr_value}' with {len(match_options)} options")
+        current_app.logger.info(f"SELECT field mapping - LLM EVALUATION: '{ocr_value}' for field '{field_name}' with {len(match_options)} candidate options (best fuzzy score: {best_score}%)")
         
         # Allow the model to be overridden via app config (set GEMINI_MODEL in .env)
         response = client.models.generate_content(
@@ -133,23 +144,25 @@ Response (return only the option value or "NONE"):
             # Check if response is one of our valid option values
             valid_values = [opt['value'] for opt in match_options]
             if response_text in valid_values:
-                current_app.logger.info(f"LLM selected: '{response_text}' for '{ocr_value}'")
+                current_app.logger.info(f"SELECT field mapping - LLM SUCCESS: '{ocr_value}' -> '{response_text}' for field '{field_name}'")
                 return response_text
             elif response_text.upper() == "NONE":
-                current_app.logger.info(f"LLM determined no match for '{ocr_value}'")
+                current_app.logger.info(f"SELECT field mapping - LLM NO MATCH: '{ocr_value}' for field '{field_name}' (LLM determined no suitable match)")
                 return None
         
         # Fallback: return the highest scoring fuzzy match if LLM fails
         if match_options:
-            current_app.logger.warning(f"LLM response unclear, using fuzzy match fallback for '{ocr_value}'")
+            current_app.logger.warning(f"SELECT field mapping - LLM FALLBACK: '{ocr_value}' -> '{match_options[0]['value']}' for field '{field_name}' (LLM response unclear, using best fuzzy match)")
             return match_options[0]['value']
             
     except Exception as e:
-        current_app.logger.error(f"Error in LLM option mapping for '{field_name}': {str(e)}")
+        current_app.logger.error(f"SELECT field mapping - ERROR: '{ocr_value}' for field '{field_name}' - {str(e)}")
         # Fallback: return the highest scoring fuzzy match
         if match_options:
+            current_app.logger.warning(f"SELECT field mapping - ERROR FALLBACK: '{ocr_value}' -> '{match_options[0]['value']}' for field '{field_name}' (using best fuzzy match due to error)")
             return match_options[0]['value']
     
+
     return None
 
 bp = Blueprint('ocr', __name__, url_prefix='/api/ocr')
