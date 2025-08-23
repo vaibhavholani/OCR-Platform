@@ -8,3 +8,4 @@ python-dotenv==1.0.0
 Werkzeug==2.3.7
 google-genai 
 pythonnet
+fuzzywuzzy

@@ -86,6 +86,16 @@ def get_user_templates(user_id):
         'count': len(templates)
     })
 
+@bp.route('/<int:user_id>/templates/names', methods=['GET'])
+def get_user_template_names(user_id):
+    """Get only template names and IDs for a user"""
+    user = User.query.get_or_404(user_id)
+    templates = user.templates.all()
+    return jsonify({
+        'templates': [{'temp_id': template.temp_id, 'name': template.name} for template in templates],
+        'count': len(templates)
+    })
+
 @bp.route('/login', methods=['POST'])
 def login_user():
     data = request.get_json()

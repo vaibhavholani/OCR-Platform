@@ -18,14 +18,20 @@ from .data_retrieval import (
     get_companies_list,
     get_ledgers_list,
     get_stock_items_list,
+    get_units_list,
     get_vouchers_list,
     find_ledger_by_name,
-    find_stock_item_by_name
+    find_stock_item_by_name,
+    find_unit_by_name
 )
 from .data_insertion import (
     create_ledger,
     update_ledger,
     create_stock_item,
+    create_simple_unit,
+    create_compound_unit,
+    create_unit,
+    update_unit,
     create_sales_voucher,
     create_purchase_voucher,
     create_payment_voucher
@@ -40,12 +46,17 @@ from .tally_field_options import (
     load_companies_as_options,
     load_ledgers_as_options,
     load_stock_items_as_options,
+    load_units_as_options,
     auto_load_tally_options,
     refresh_field_options,
     get_field_options_summary,
     load_customer_options,
     load_vendor_options,
     load_all_ledger_options,
+    load_stock_items_as_sub_field_options,
+    load_ledgers_as_sub_field_options,
+    load_units_as_sub_field_options,
+    auto_load_tally_sub_field_options,
     TallyFieldOptionsError
 )
 
@@ -56,13 +67,19 @@ __all__ = [
     'get_companies_list',
     'get_ledgers_list', 
     'get_stock_items_list',
+    'get_units_list',
     'get_vouchers_list',
     'find_ledger_by_name',
     'find_stock_item_by_name',
+    'find_unit_by_name',
     # Data Insertion
     'create_ledger',
     'update_ledger',
     'create_stock_item',
+    'create_simple_unit',
+    'create_compound_unit',
+    'create_unit',
+    'update_unit',
     'create_sales_voucher',
     'create_purchase_voucher',
     'create_payment_voucher',
@@ -75,11 +92,17 @@ __all__ = [
     'load_companies_as_options',
     'load_ledgers_as_options',
     'load_stock_items_as_options',
+    'load_units_as_options',
     'auto_load_tally_options',
     'refresh_field_options',
     'get_field_options_summary',
     'load_customer_options',
     'load_vendor_options',
     'load_all_ledger_options',
+    # Sub-Field Options
+    'load_stock_items_as_sub_field_options',
+    'load_ledgers_as_sub_field_options',
+    'load_units_as_sub_field_options', 
+    'auto_load_tally_sub_field_options',
     'TallyFieldOptionsError'
 ]

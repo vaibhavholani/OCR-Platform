@@ -21,6 +21,7 @@ class DataType(Enum):
     FLOAT = "float"
     DATE = "date"
     BOOLEAN = "boolean"
+    SELECT = "select"
 
 class ExportFormat(Enum):
     PDF = "pdf"

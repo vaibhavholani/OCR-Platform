@@ -76,7 +76,13 @@ class TallySession(AbstractContextManager):
         * "legacy" – Uses the classic `TallyConnector.Services.TallyService`
         * "latest" – Uses `TallyConnector.Services.TallyPrime.V6.TallyPrimeService`
     host:
-        The Tally host URL.  Defaults to `http://localhost:9000`.
+        The Tally host URL. If not provided, will be resolved from api_key.
+        Defaults to `http://localhost:9000` if neither host nor api_key is provided.
+    api_key:
+        User's API key for dynamic host resolution. If provided, host will be
+        constructed as `http://{api_key}.holanitunnel.net`.
+    port:
+        Tally service port. Defaults to 80.
     """
 
     def __init__(
@@ -84,7 +90,9 @@ class TallySession(AbstractContextManager):
         lib_dir: str | Path = None,
         *,
         version: str = "legacy",
-        host: str = "http://localhost:9000",
+        host: str = None,
+        api_key: str = None,
+        port: int = None,
     ) -> None:
         if not CLR_AVAILABLE:
             raise RuntimeError("CLR/pythonnet not available. Install pythonnet package.")
@@ -95,13 +103,22 @@ class TallySession(AbstractContextManager):
         if lib_dir is None:
             lib_dir = TallyConfig.get_lib_dir(version)
             
+        # Use config to get port if not provided
+        if port is None:
+            port = TallyConfig.DEFAULT_PORT
+            
+        # Resolve host dynamically from API key or use provided host
+        resolved_host = self._resolve_host(host, api_key)
+            
         if version == "latest":
             _add_assembly_reference(lib_dir, "TallyConnectorNew")
         else:
             _add_assembly_reference(lib_dir, "TallyConnector")
         
         self.version = version.lower()
-        self.host = host
+        self.host = resolved_host
+        self.api_key = api_key
+        self.port = port
         self.lib_dir = lib_dir
         
         # Version-specific imports after CLR reference is added
@@ -114,9 +131,13 @@ class TallySession(AbstractContextManager):
         
         # Initialize defaults
         self.request_options = None
+        self.master_request_options = None
+        self.post_request_options = None
         self._vouchers_available = False
+        self._units_available = False
         self._ledger_import_path = None
         self._stock_item_import_path = None
+        self._unit_import_path = None
         
         if self.version == "latest":
             # Latest version specific imports
@@ -138,9 +159,8 @@ class TallySession(AbstractContextManager):
                 logger.warning("Ledger not available from TallyConnectorNew.Core.Models in latest version")
                 
         elif self.version == "legacy":
-            # Legacy version doesn't have RequestOptions
-            self.request_options = None
-            logger.info("RequestOptions not available in legacy version")
+            # Legacy version RequestOptions setup
+            self._setup_legacy_request_options()
             
             # Legacy version uses Masters namespace
             try:
@@ -152,6 +172,9 @@ class TallySession(AbstractContextManager):
         
         # Common voucher-related imports (try both versions)
         self._load_voucher_functionality()
+        
+        # Load unit-related functionality
+        self._load_unit_functionality()
         
     def _load_voucher_functionality(self):
         """Load voucher-related classes and converters."""
@@ -207,6 +230,49 @@ class TallySession(AbstractContextManager):
             logger.warning("Voucher classes not available: %s", e)
             self._vouchers_available = False
 
+    def _setup_legacy_request_options(self):
+        """Setup RequestOptions for legacy version."""
+        try:
+            from TallyConnector.Core.Models import (  # type: ignore
+                RequestOptions,
+                MasterRequestOptions,
+                PostRequestOptions
+            )
+            
+            self.request_options = RequestOptions()
+            self.master_request_options = MasterRequestOptions()
+            self.post_request_options = PostRequestOptions()
+            logger.info("RequestOptions loaded for legacy version")
+            
+        except ImportError as e:
+            logger.warning("RequestOptions not available in legacy version: %s", e)
+            self.request_options = None
+            self.master_request_options = None
+            self.post_request_options = None
+
+    def _load_unit_functionality(self):
+        """Load unit-related classes and functionality."""
+        try:
+            from TallyConnector.Core.Models.Masters.Inventory import Unit  # type: ignore
+            from TallyConnector.Core.Models import Action  # type: ignore
+            from TallyConnector.Core.Converters.XMLConverterHelpers import TallyYesNo  # type: ignore
+            
+            # Store unit classes for use in unit creation
+            self._unit_classes = {
+                'Unit': Unit,
+                'Action': Action,
+                'TallyYesNo': TallyYesNo
+            }
+            
+            # Set unit import path for dynamic imports
+            self._unit_import_path = "TallyConnector.Core.Models.Masters.Inventory"
+            self._units_available = True
+            logger.info("Unit functionality loaded successfully")
+            
+        except ImportError as e:
+            logger.warning("Unit classes not available: %s", e)
+            self._units_available = False
+
     # --------------------------------------------------------------------- API
 
     # basic CRUD helpers -------------------------------------------------------
@@ -247,6 +313,43 @@ class TallySession(AbstractContextManager):
         else:
             # For legacy version without RequestOptions
             return self._svc.GetVouchersAsync().Result
+
+    def get_units(self, request_options: Any = None):
+        """Get units. Uses RequestOptions if available, otherwise uses default parameters."""
+        if not self._units_available:
+            raise RuntimeError("Unit functionality not available - check TallyConnector imports")
+            
+        if request_options is None and self.request_options is not None:
+            request_options = self.request_options
+            
+        # Import the Unit class to use as generic type parameter
+        Unit = self._unit_classes['Unit']
+        
+        if request_options is not None:
+            # Call the generic method with Unit type parameter
+            return self._svc.GetUnitsAsync[Unit](request_options).Result
+        else:
+            # Try calling without RequestOptions (should use default null)
+            return self._svc.GetUnitsAsync[Unit]().Result
+
+    def get_unit(self, unit_name: str, request_options: Any = None):
+        """Get specific unit by name."""
+        if not self._units_available:
+            raise RuntimeError("Unit functionality not available - check TallyConnector imports")
+            
+        if request_options is None and self.master_request_options is not None:
+            request_options = self.master_request_options
+            
+        if request_options is not None:
+            # GetUnitAsync might also be generic, try with Unit type
+            try:
+                Unit = self._unit_classes['Unit']
+                return self._svc.GetUnitAsync[Unit](unit_name, request_options).Result
+            except Exception:
+                # Fallback to non-generic call if the above fails
+                return self._svc.GetUnitAsync(unit_name, request_options).Result
+        else:
+            raise RuntimeError("MasterRequestOptions required for GetUnitAsync")
 
     def create_ledger(
         self,
@@ -482,15 +585,103 @@ class TallySession(AbstractContextManager):
         else:
             raise RuntimeError(f"StockItem creation not implemented for version '{self.version}'. Use legacy version.")
 
+    def create_unit(
+        self,
+        name: str,
+        *,
+        decimal_places: int = 0,
+        is_simple: bool = True,
+        base_unit: Optional[str] = None,
+        conversion: float = 1.0,
+        **kwargs,
+    ):
+        """
+        Create a new Unit of Measure.
+        
+        Parameters
+        ----------
+        name: str
+            Name/Symbol of the unit (e.g., "kg", "litre", "pcs")
+        decimal_places: int
+            Number of decimal places (0 to 4, default: 0)
+        is_simple: bool
+            True for simple units, False for compound units (default: True)
+        base_unit: str, optional
+            Base unit for compound units (required if is_simple=False)
+        conversion: float
+            Conversion factor for compound units (default: 1.0)
+        **kwargs:
+            Additional unit attributes
+            
+        Returns
+        -------
+        Response from Tally
+        """
+        if not self._units_available:
+            raise RuntimeError("Unit functionality not available - check TallyConnector imports")
+            
+        if self.version == "legacy":
+            try:
+                # Get classes from stored imports
+                Unit = self._unit_classes['Unit']
+                Action = self._unit_classes['Action']
+                TallyYesNo = self._unit_classes['TallyYesNo']
+                
+                unit = Unit()
+                unit.Name = name
+                unit.DecimalPlaces = decimal_places
+                unit.IsSimpleUnit = TallyYesNo(is_simple)
+                unit.Action = Action.Create
+                
+                # For compound units
+                if not is_simple:
+                    if not base_unit:
+                        raise ValueError("base_unit is required for compound units")
+                    unit.BaseUnit = base_unit
+                    unit.Conversion = conversion
+                
+                # Apply extra fields via **kwargs
+                for k, v in kwargs.items():
+                    if hasattr(unit, k):
+                        # Convert boolean values to TallyYesNo if needed
+                        if isinstance(v, bool) and k in ['IsGstExcluded']:
+                            v = TallyYesNo(v)
+                        setattr(unit, k, v)
+                    else:
+                        logger.warning("Unknown Unit attribute: %s", k)
+                
+                # Use PostRequestOptions if available
+                post_options = self.post_request_options
+                if post_options is not None:
+                    # PostUnitAsync is also generic
+                    resp = self._svc.PostUnitAsync[Unit](unit, post_options).Result
+                else:
+                    # Fallback without PostRequestOptions
+                    resp = self._svc.PostUnitAsync[Unit](unit).Result
+                    
+                return resp.Response if hasattr(resp, "Response") else resp
+                
+            except ImportError as e:
+                raise RuntimeError(f"Unit creation not available in legacy version: {e}")
+        else:
+            raise RuntimeError(f"Unit creation not implemented for version '{self.version}'. Use legacy version.")
+
     def get_version_info(self):
         """Get information about what features are available in the current version."""
         info = {
             "version": self.version,
             "lib_dir": str(self.lib_dir),
             "host": self.host,
+            "port": self.port,
+            "api_key": self.api_key[:8] + "..." if self.api_key else None,  # Only show first 8 chars for security
+            "host_source": "api_key" if self.api_key else "explicit" if self.host != TallyConfig.DEFAULT_HOST else "default",
             "request_options_available": self.request_options is not None,
+            "master_request_options_available": self.master_request_options is not None,
+            "post_request_options_available": self.post_request_options is not None,
             "vouchers_available": self._vouchers_available,
+            "units_available": self._units_available,
             "ledger_import_path": self._ledger_import_path,
+            "unit_import_path": self._unit_import_path,
             "stock_item_available": self.version == "legacy"
         }
         return info
@@ -514,20 +705,94 @@ class TallySession(AbstractContextManager):
 
     # ------------------------------------------------------------------- internals
 
+    def _resolve_host(self, host: str = None, api_key: str = None) -> str:
+        """
+        Resolve the appropriate host URL based on provided parameters.
+        
+        Parameters
+        ----------
+        host : str, optional
+            Explicitly provided host URL
+        api_key : str, optional
+            User's API key for dynamic host resolution
+            
+        Returns
+        -------
+        str
+            Resolved host URL
+            
+        Raises
+        ------
+        ValueError
+            If neither host nor api_key is provided and fallback is disabled
+        """
+        # If host is explicitly provided, use it
+        if host:
+            logger.info("Using explicitly provided host: %s", host)
+            return host
+        
+        # If api_key is provided, resolve host from it
+        if api_key:
+            try:
+                resolved_host = TallyConfig.resolve_host_from_api_key(api_key)
+                logger.info("Resolved host from API key: %s", resolved_host)
+                return resolved_host
+            except ValueError as e:
+                logger.warning("Failed to resolve host from API key: %s", e)
+                # If fallback is enabled, TallyConfig.resolve_host_from_api_key will return default
+                # If not, it will raise the exception which we re-raise here
+                raise
+        
+        # Neither host nor api_key provided - use default
+        logger.info("No host or API key provided, using default host: %s", TallyConfig.DEFAULT_HOST)
+        return TallyConfig.DEFAULT_HOST
+
     def _create_service(self):
         """Create the appropriate TallyService based on version."""
         if self.version == "legacy":
             from TallyConnector.Services import TallyService
-            return TallyService()
+            tally = TallyService()
+            tally.Setup(self.host, self.port)
+            return tally
         elif self.version == "latest":
             from TallyConnectorNew.Services.TallyPrime.V6 import (  # type: ignore
                 TallyPrimeService,
             )
-            return TallyPrimeService()
+            tally = TallyPrimeService()
+            tally.SetupTallyService(self.host, self.port) 
+            return tally
         else:
             raise ValueError(
                 "version must be 'legacy', 'latest' – got %r" % self.version
             )
+
+
+    @classmethod
+    def from_user(cls, user, **kwargs):
+        """
+        Create a TallySession instance from a User object.
+        
+        Parameters
+        ----------
+        user : User
+            User model instance with api_key attribute
+        **kwargs
+            Additional parameters to pass to TallySession constructor
+            
+        Returns
+        -------
+        TallySession
+            Configured TallySession instance
+            
+        Raises
+        ------
+        AttributeError
+            If user object doesn't have api_key attribute
+        """
+        if not hasattr(user, 'api_key'):
+            raise AttributeError("User object must have an 'api_key' attribute")
+        
+        return cls(api_key=user.api_key, **kwargs)
 
 
 __all__ = ["TallySession"]

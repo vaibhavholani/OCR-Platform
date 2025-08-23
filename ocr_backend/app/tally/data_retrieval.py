@@ -264,3 +264,106 @@ def _apply_voucher_filters(vouchers: List[Dict], filters: Dict) -> List[Dict]:
     # Add more filters as needed (date ranges, amount ranges, etc.)
     
     return filtered
+
+
+def get_units_list(connector: TallyConnector, company_name: Optional[str] = None) -> List[Dict]:
+    """
+    Retrieve the list of all units of measure from Tally.
+    
+    Args:
+        connector: Active TallyConnector instance
+        company_name: Optional company name filter (not used currently)
+        
+    Returns:
+        List of unit dictionaries
+        
+    Raises:
+        TallyConnectorError: If retrieval fails
+    """
+    try:
+        units = connector.session.get_units()
+        result = []
+        
+        for unit in units:
+            # Handle None values from Tally data
+            name = getattr(unit, 'Name', '') or ''
+            decimal_places = getattr(unit, 'DecimalPlaces', 0) or 0
+            is_simple_unit = str(getattr(unit, 'IsSimpleUnit', '')).lower()
+            base_unit = getattr(unit, 'BaseUnit', '') or ''
+            conversion = getattr(unit, 'Conversion', 1.0) or 1.0
+            guid = getattr(unit, 'GUID', '') or ''
+            is_active = getattr(unit, 'IsActive', True)
+            
+            unit_dict = {
+                'name': name,
+                'decimal_places': decimal_places,
+                'is_simple_unit': is_simple_unit == 'yes',  # Convert TallyYesNo to boolean
+                'base_unit': base_unit,
+                'conversion': float(conversion),
+                'is_active': is_active,
+                'guid': guid,
+                'alter_id': getattr(unit, 'AlterId', 0) or 0,
+                'master_id': getattr(unit, 'MasterId', 0) or 0
+            }
+            result.append(unit_dict)
+        
+        logger.info(f"Retrieved {len(result)} units")
+        return result
+        
+    except Exception as e:
+        logger.error(f"Failed to retrieve units: {e}")
+        raise TallyConnectorError(f"Units retrieval failed: {e}")
+
+
+def find_unit_by_name(connector: TallyConnector, unit_name: str) -> Optional[Dict]:
+    """
+    Find a specific unit by name (case-insensitive).
+    
+    Args:
+        connector: Active TallyConnector instance
+        unit_name: Name of the unit to find
+        
+    Returns:
+        Unit dictionary if found, None otherwise
+        
+    Raises:
+        TallyConnectorError: If search fails
+    """
+    try:
+        # First try direct lookup using GetUnitAsync
+        try:
+            unit = connector.session.get_unit(unit_name)
+            if unit:
+                logger.info(f"Found unit: {getattr(unit, 'Name', 'Unknown')}")
+                return {
+                    'name': getattr(unit, 'Name', ''),
+                    'decimal_places': getattr(unit, 'DecimalPlaces', 0) or 0,
+                    'is_simple_unit': str(getattr(unit, 'IsSimpleUnit', '')).lower() == 'yes',
+                    'base_unit': getattr(unit, 'BaseUnit', '') or '',
+                    'conversion': float(getattr(unit, 'Conversion', 1.0) or 1.0),
+                    'is_active': getattr(unit, 'IsActive', True),
+                    'guid': getattr(unit, 'GUID', '') or '',
+                    'alter_id': getattr(unit, 'AlterId', 0) or 0,
+                    'master_id': getattr(unit, 'MasterId', 0) or 0
+                }
+        except Exception as direct_lookup_error:
+            logger.debug(f"Direct lookup failed for unit '{unit_name}': {direct_lookup_error}")
+            
+        # Fallback to searching through all units
+        units = get_units_list(connector)
+        unit_name_lower = unit_name.lower().strip()
+        
+        for unit in units:
+            # Safe handling of potential None values
+            unit_name_safe = (unit['name'] or '').lower().strip()
+            
+            if unit_name_safe == unit_name_lower:
+                logger.info(f"Found unit: {unit['name']}")
+                return unit
+        
+        logger.info(f"Unit not found: {unit_name}")
+        return None
+        
+    except Exception as e:
+        logger.error(f"Failed to find unit {unit_name}: {e}")
+        raise TallyConnectorError(f"Unit search failed: {e}")

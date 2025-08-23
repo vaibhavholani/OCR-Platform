@@ -1,8 +1,13 @@
 from flask import Blueprint, jsonify, request, current_app
 from .. import db
-from ..models import OCRData, OCRLineItem, OCRLineItemValue, Document, TemplateField, SubTemplateField, Template
+from ..models import OCRData, OCRLineItem, OCRLineItemValue, Document, TemplateField, SubTemplateField, Template, FieldOption, SubTemplateFieldOption
 from ..utils.gemini_ocr import call_gemini_ocr, parse_gemini_response
-from ..utils.enums import DocumentStatus, FieldType
+from ..utils.enums import DocumentStatus, FieldType, DataType
+from ..utils.data_conversion import (
+    safe_convert_template_field_value, 
+    safe_convert_sub_template_field_value,
+    DataConversionError
+)
 from ..tally import (
     auto_load_tally_options, 
     load_companies_as_options, 
@@ -13,9 +18,152 @@ from ..tally import (
     load_customer_options,
     load_vendor_options,
     load_all_ledger_options,
+    load_stock_items_as_sub_field_options,
+    load_ledgers_as_sub_field_options,
+    auto_load_tally_sub_field_options,
     TallyFieldOptionsError
 )
 import os
+from fuzzywuzzy import fuzz
+from fuzzywuzzy import process
+import json
+
+def map_select_field_value(ocr_value, field_options, field_name):
+    """
+    Map OCR extracted value to field options using fuzzy matching and LLM confirmation.
+    
+    Args:
+        ocr_value: The raw OCR extracted value
+        field_options: List of FieldOption objects for the field
+        field_name: Name of the field for context
+        
+    Returns:
+        str: Final mapped value or None if no match found
+    """
+    if not ocr_value:
+        return None
+    
+    if not field_options:
+        return ocr_value  # No options configured, return original
+    
+    # Extract option labels for matching
+    option_labels = [option.option_label for option in field_options]
+    option_values = [option.option_value for option in field_options]
+    
+    # Get top 5 fuzzy matches based on option labels
+    fuzzy_matches = process.extractBests(
+        ocr_value, 
+        option_labels, 
+        scorer=fuzz.WRatio,  # Use weighted ratio for better matching
+        score_cutoff=75,     # Increased minimum similarity score
+        limit=5              # Top 5 matches
+    )
+    from flask import current_app
+
+    # If no decent matches found, return None (no mapping found)
+    if not fuzzy_matches:
+        
+        current_app.logger.info(f"SELECT field mapping - NO MATCHES: '{ocr_value}' for field '{field_name}' (no options above 75% similarity)")
+        return None
+    
+    # Check for high confidence match (90%+) - auto-match without LLM
+    best_match, best_score = fuzzy_matches[0]
+    if best_score >= 90:
+        # Find corresponding option value and return directly
+        matching_option = next((opt for opt in field_options if opt.option_label == best_match), None)
+        if matching_option:
+            current_app.logger.info(f"SELECT field mapping - AUTO-MATCH: '{ocr_value}' -> '{matching_option.option_value}' ({best_score}% confidence) for field '{field_name}'")
+            return matching_option.option_value
+    
+    # Build LLM prompt for final selection
+    match_options = []
+    for match, score in fuzzy_matches:
+        # Find corresponding option value
+        matching_option = next((opt for opt in field_options if opt.option_label == match), None)
+        if matching_option:
+            match_options.append({
+                'value': matching_option.option_value,
+                'label': matching_option.option_label,
+                'similarity_score': score
+            })
+    
+    # Create LLM prompt for final selection
+    llm_prompt = f"""
+You are helping to map OCR extracted text to predefined options for a field called "{field_name}".
+
+OCR Extracted Value: "{ocr_value}"
+
+Available Options (with fuzzy matching scores):
+"""
+    
+    for i, option in enumerate(match_options, 1):
+        llm_prompt += f"{i}. Value: '{option['value']}' | Label: '{option['label']}' | Similarity: {option['similarity_score']}%\n"
+    
+    llm_prompt += f"""
+Please analyze the OCR extracted value "{ocr_value}" and determine the best match from the above options.
+
+Instructions:
+1. Consider both semantic meaning and spelling variations
+2. Account for OCR errors (character substitution, missing characters, etc.)
+3. If you find a good match, return ONLY the option VALUE (not the label)
+4. If none of the options are a reasonable match, return "NONE"
+
+Response (return only the option value or "NONE"):
+"""
+    
+    try:
+        # Call Gemini for final selection - text only
+        from google import genai
+        
+        # Get API key
+        api_key = current_app.config.get('GEMINI_API_KEY')
+        if not api_key:
+            current_app.logger.warning("GEMINI_API_KEY not found, using fuzzy match fallback")
+            # Fallback to best fuzzy match
+            if match_options:
+                return match_options[0]['value']
+            return None
+        
+        # Configure Gemini client
+        client = genai.Client(api_key=api_key)
+        
+        # Log the mapping attempt
+        current_app.logger.info(f"SELECT field mapping - LLM EVALUATION: '{ocr_value}' for field '{field_name}' with {len(match_options)} candidate options (best fuzzy score: {best_score}%)")
+        
+        # Allow the model to be overridden via app config (set GEMINI_MODEL in .env)
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",           # newer, fast + thinking, free tier
+            contents=[llm_prompt]
+        )
+
+        
+        # Extract text from response
+        if response and response.text:
+            response_text = response.text.strip().strip('"\'')
+            
+            # Check if response is one of our valid option values
+            valid_values = [opt['value'] for opt in match_options]
+            if response_text in valid_values:
+                current_app.logger.info(f"SELECT field mapping - LLM SUCCESS: '{ocr_value}' -> '{response_text}' for field '{field_name}'")
+                return response_text
+            elif response_text.upper() == "NONE":
+                current_app.logger.info(f"SELECT field mapping - LLM NO MATCH: '{ocr_value}' for field '{field_name}' (LLM determined no suitable match)")
+                return None
+        
+        # Fallback: return the highest scoring fuzzy match if LLM fails
+        if match_options:
+            current_app.logger.warning(f"SELECT field mapping - LLM FALLBACK: '{ocr_value}' -> '{match_options[0]['value']}' for field '{field_name}' (LLM response unclear, using best fuzzy match)")
+            return match_options[0]['value']
+            
+    except Exception as e:
+        current_app.logger.error(f"SELECT field mapping - ERROR: '{ocr_value}' for field '{field_name}' - {str(e)}")
+        # Fallback: return the highest scoring fuzzy match
+        if match_options:
+            current_app.logger.warning(f"SELECT field mapping - ERROR FALLBACK: '{ocr_value}' -> '{match_options[0]['value']}' for field '{field_name}' (using best fuzzy match due to error)")
+            return match_options[0]['value']
+    
+
+    return None
 
 bp = Blueprint('ocr', __name__, url_prefix='/api/ocr')
 
@@ -367,6 +515,37 @@ def process_document_internal(doc_id, template_id):
             db.session.commit()
             return {'success': False, 'message': 'No fields defined for this template'}
 
+        # 5.5. Refresh auto ledger pull for all SELECT fields
+        print("Refreshing Tally ledger options for SELECT fields...")
+        select_fields = [f for f in template_fields if f.field_type == FieldType.SELECT]
+        for select_field in select_fields:
+            try:
+                refresh_result = refresh_field_options(select_field.field_id)
+                print(f"Refreshed {refresh_result.get('options_count', 0)} options for field '{select_field.field_name.value}'")
+            except TallyFieldOptionsError as e:
+                print(f"Warning: Failed to refresh options for field '{select_field.field_name.value}': {e}")
+                # Continue processing even if refresh fails
+            except Exception as e:
+                print(f"Warning: Unexpected error refreshing field '{select_field.field_name.value}': {e}")
+                # Continue processing even if refresh fails
+        
+        # Also refresh SELECT sub-fields in table fields
+        table_fields_for_refresh = [f for f in template_fields if f.field_type == FieldType.TABLE]
+        for table_field in table_fields_for_refresh:
+            sub_fields = SubTemplateField.query.filter_by(field_id=table_field.field_id).all()
+            select_sub_fields = [sf for sf in sub_fields if sf.data_type == DataType.SELECT]
+            for select_sub_field in select_sub_fields:
+                try:
+                    # Use the sub-field auto-load function
+                    refresh_result = auto_load_tally_sub_field_options(select_sub_field.sub_temp_field_id)
+                    print(f"Refreshed {refresh_result.get('options_count', 0)} options for sub-field '{select_sub_field.field_name.value}'")
+                except TallyFieldOptionsError as e:
+                    print(f"Warning: Failed to refresh options for sub-field '{select_sub_field.field_name.value}': {e}")
+                    # Continue processing even if refresh fails
+                except Exception as e:
+                    print(f"Warning: Unexpected error refreshing sub-field '{select_sub_field.field_name.value}': {e}")
+                    # Continue processing even if refresh fails
+
         # 6. Process different field types
         extracted_data = {}
         ocr_data_records = []
@@ -376,18 +555,21 @@ def process_document_internal(doc_id, template_id):
         # Separate fields by type
         text_fields = [f for f in template_fields if f.field_type in [FieldType.TEXT, FieldType.SELECT, FieldType.NUMBER, FieldType.DATE, FieldType.EMAIL, FieldType.CURRENCY]]
         table_fields = [f for f in template_fields if f.field_type == FieldType.TABLE]
-
         # 7. Process text-based fields
         if text_fields:
             # Build enhanced prompt with hierarchical AI instructions
             enhanced_prompt = build_comprehensive_text_prompt(template, text_fields)
+            print("Enhanced prompt for text fields:", enhanced_prompt)
             field_names = [f.field_name.value for f in text_fields]
             
             # Call Gemini OCR with enhanced prompt
             gemini_response = call_gemini_ocr(doc.file_path, field_names, custom_prompt=enhanced_prompt)
+            print("Gemini response for text fields:", gemini_response)
             extracted_fields = parse_gemini_response(gemini_response, field_names)
-            
-            # Check for parsing errors
+            # print("extracted fields {extracted_fields}")
+            print("Parsed extracted fields:", extracted_fields)
+
+            # Check for parsing error
             if 'parse_error' in extracted_fields:
                 doc.status = DocumentStatus.FAILED
                 db.session.commit()
@@ -397,14 +579,50 @@ def process_document_internal(doc_id, template_id):
             for field in text_fields:
                 field_value = extracted_fields.get(field.field_name.value)
                 if field_value is not None:
+                    # Step 1: Apply data type conversion
+                    converted_value, conversion_error = safe_convert_template_field_value(
+                        field_value, 
+                        field.field_type, 
+                        field.field_name.value
+                    )
+                    
+                    # Step 2: Map SELECT field values to predefined options (after conversion)
+                    final_value = converted_value
+                    original_value = str(field_value)
+                    was_mapped = False
+                    
+                    if field.field_type == FieldType.SELECT:
+                        # Get field options for SELECT fields
+                        field_options = FieldOption.query.filter_by(field_id=field.field_id).all()
+                        if field_options:
+                            # Use fuzzy matching + LLM to map the value
+                            mapped_value = map_select_field_value(
+                                str(converted_value), 
+                                field_options, 
+                                field.field_name.value
+                            )
+                            if mapped_value is not None:
+                                final_value = mapped_value
+                                was_mapped = True
+                                print(f"Mapped SELECT field '{field.field_name.value}': '{converted_value}' -> '{final_value}'")
+                            else:
+                                print(f"No mapping found for SELECT field '{field.field_name.value}': '{converted_value}'")
+                    
                     ocr_data = OCRData(
                         document_id=doc_id,
                         field_id=field.field_id,
-                        predicted_value=str(field_value),
+                        predicted_value=str(final_value),
                         confidence=0.8  # Default confidence, can be improved
                     )
                     ocr_data_records.append(ocr_data)
-                    extracted_data[field.field_name.value] = field_value
+                    extracted_data[field.field_name.value] = final_value
+                    
+                    # Add metadata for field processing
+                    extracted_data[f"{field.field_name.value}_original"] = original_value
+                    if conversion_error:
+                        extracted_data[f"{field.field_name.value}_conversion_error"] = conversion_error
+                    if field.field_type == FieldType.SELECT:
+                        extracted_data[f"{field.field_name.value}_mapped"] = was_mapped
 
         # 8. Process table fields
         for table_field in table_fields:
@@ -427,14 +645,12 @@ def process_document_internal(doc_id, template_id):
                 
                 # Handle table data (assuming it returns a list of rows)
                 if isinstance(table_data, dict) and 'rows' in table_data:
-                    # Store table data for response
-                    table_data_results[table_field.field_id] = {
-                        'field_name': table_field.field_name.value,
-                        'sub_fields': sub_fields,
-                        'table_data': table_data
+                    # Create a copy of table_data to store mapped values for response
+                    mapped_table_data = {
+                        'rows': []
                     }
                     
-                    # Store in database
+                    # Store in database and create mapped response data
                     for row_index, row_data in enumerate(table_data['rows']):
                         # Create line item
                         line_item = OCRLineItem(
@@ -445,22 +661,75 @@ def process_document_internal(doc_id, template_id):
                         db.session.add(line_item)
                         db.session.flush()  # Get the ID
                         
+                        # Create mapped row data for response
+                        mapped_row_data = {}
+                        
                         # Create line item values
                         for sub_field in sub_fields:
                             value = row_data.get(sub_field.field_name.value)
                             if value is not None:
+                                # Step 1: Apply data type conversion
+                                converted_value, conversion_error = safe_convert_sub_template_field_value(
+                                    value,
+                                    sub_field.data_type,
+                                    sub_field.field_name.value
+                                )
+                                
+                                # Step 2: Map SELECT sub-field values to predefined options (after conversion)
+                                final_value = converted_value
+                                original_value = str(value)
+                                was_mapped = False
+                                
+                                if sub_field.data_type == DataType.SELECT:
+                                    # Get sub-field options for SELECT sub-fields
+                                    sub_field_options = SubTemplateFieldOption.query.filter_by(sub_temp_field_id=sub_field.sub_temp_field_id).all()
+                                    if sub_field_options:
+                                        # Use fuzzy matching + LLM to map the value
+                                        mapped_value = map_select_field_value(
+                                            str(converted_value), 
+                                            sub_field_options, 
+                                            sub_field.field_name.value
+                                        )
+                                        if mapped_value is not None:
+                                            final_value = mapped_value
+                                            was_mapped = True
+                                            print(f"Mapped SELECT sub-field '{sub_field.field_name.value}': '{converted_value}' -> '{final_value}'")
+                                        else:
+                                            print(f"No mapping found for SELECT sub-field '{sub_field.field_name.value}': '{converted_value}'")
+                                
+                                # Store mapped value for response
+                                mapped_row_data[sub_field.field_name.value] = final_value
+                                
+                                # Add metadata for field processing
+                                mapped_row_data[f"{sub_field.field_name.value}_original"] = original_value
+                                if conversion_error:
+                                    mapped_row_data[f"{sub_field.field_name.value}_conversion_error"] = conversion_error
+                                if sub_field.data_type == DataType.SELECT:
+                                    mapped_row_data[f"{sub_field.field_name.value}_mapped"] = was_mapped
+                                
                                 line_item_value = OCRLineItemValue(
                                     ocr_items_id=line_item.ocr_items_id,
                                     sub_temp_field_id=sub_field.sub_temp_field_id,
-                                    predicted_value=str(value),
+                                    predicted_value=str(final_value),
                                     confidence=0.8
                                 )
                                 db.session.add(line_item_value)
                         
+                        # Add mapped row to response data
+                        mapped_table_data['rows'].append(mapped_row_data)
                         line_item_records.append(line_item)
+                    
+                    # Store table data with mapped values for response
+                    table_data_results[table_field.field_id] = {
+                        'field_name': table_field.field_name.value,
+                        'sub_fields': sub_fields,
+                        'table_data': mapped_table_data
+                    }
 
         # 9. Save all OCR data to database
+        # print("OCR data", ocr_data_records)
         for ocr_data in ocr_data_records:
+            print("Adding OCR data record:", ocr_data.to_dict())
             db.session.add(ocr_data)
 
         # 10. Update document status to PROCESSED
@@ -509,7 +778,7 @@ def process_document():
 
     if not doc_id or not template_id:
         return jsonify({'error': 'Missing required fields: doc_id and template_id'}), 400
-
+    print(f"Processing document {doc_id} with template {template_id}")
     result = process_document_internal(doc_id, template_id)
     
     if result['success']:
@@ -612,4 +881,74 @@ def load_field_vendors(field_id):
         return jsonify({'error': str(e)}), 400
     except Exception as e:
         current_app.logger.error(f"Error loading vendors for field {field_id}: {e}")
-        return jsonify({'error': f'Unexpected error: {str(e)}'}), 500 
+        return jsonify({'error': f'Unexpected error: {str(e)}'}), 500
+
+# Sub-Template Field Tally Options Endpoints
+@bp.route('/sub-field/<int:sub_field_id>/load_tally_options', methods=['POST'])
+def load_sub_field_tally_options(sub_field_id):
+    """
+    Load Tally data as options for a SELECT sub-template field.
+    
+    Request Body:
+    {
+        "data_type": "auto|stock_items|ledgers",
+        "group_filter": "optional_group_name",
+        "clear_existing": true
+    }
+    """
+    try:
+        data = request.get_json() or {}
+        data_type = data.get('data_type', 'auto')
+        group_filter = data.get('group_filter')
+        clear_existing = data.get('clear_existing', True)
+        
+        if data_type == 'auto':
+            result = auto_load_tally_sub_field_options(sub_field_id, clear_existing)
+        elif data_type == 'stock_items':
+            result = load_stock_items_as_sub_field_options(sub_field_id, group_filter, clear_existing)
+        elif data_type == 'ledgers':
+            result = load_ledgers_as_sub_field_options(sub_field_id, group_filter, clear_existing)
+        else:
+            return jsonify({'error': 'Invalid data_type. Valid options: auto, stock_items, ledgers'}), 400
+            
+        return jsonify(result)
+        
+    except TallyFieldOptionsError as e:
+        return jsonify({'error': str(e)}), 400
+    except Exception as e:
+        current_app.logger.error(f"Error loading Tally options for sub-field {sub_field_id}: {e}")
+        return jsonify({'error': f'Unexpected error: {str(e)}'}), 500
+
+@bp.route('/sub-field/<int:sub_field_id>/load_stock_items', methods=['POST'])
+def load_sub_field_stock_items(sub_field_id):
+    """Load stock items as options for a sub-template field"""
+    try:
+        data = request.get_json() or {}
+        stock_group = data.get('stock_group')
+        clear_existing = data.get('clear_existing', True)
+        
+        result = load_stock_items_as_sub_field_options(sub_field_id, stock_group, clear_existing)
+        return jsonify(result)
+        
+    except TallyFieldOptionsError as e:
+        return jsonify({'error': str(e)}), 400
+    except Exception as e:
+        current_app.logger.error(f"Error loading stock items for sub-field {sub_field_id}: {e}")
+        return jsonify({'error': f'Unexpected error: {str(e)}'}), 500
+
+@bp.route('/sub-field/<int:sub_field_id>/load_ledgers', methods=['POST'])
+def load_sub_field_ledgers(sub_field_id):
+    """Load ledgers as options for a sub-template field"""
+    try:
+        data = request.get_json() or {}
+        ledger_group = data.get('ledger_group')
+        clear_existing = data.get('clear_existing', True)
+        
+        result = load_ledgers_as_sub_field_options(sub_field_id, ledger_group, clear_existing)
+        return jsonify(result)
+        
+    except TallyFieldOptionsError as e:
+        return jsonify({'error': str(e)}), 400
+    except Exception as e:
+        current_app.logger.error(f"Error loading ledgers for sub-field {sub_field_id}: {e}")
+        return jsonify({'error': f'Unexpected error: {str(e)}'}), 500

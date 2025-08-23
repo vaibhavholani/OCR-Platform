@@ -1,7 +1,9 @@
 from flask import Blueprint, jsonify, request
+from flask import current_app
 from .. import db
-from ..models import Template, TemplateField, SubTemplateField, FieldOption
+from ..models import Template, TemplateField, SubTemplateField, FieldOption, SubTemplateFieldOption
 from ..utils.enums import FieldType, FieldName, DataType
+from ..tally import auto_load_tally_options, auto_load_tally_sub_field_options, TallyFieldOptionsError
 
 bp = Blueprint('templates', __name__, url_prefix='/api/templates')
 
@@ -19,6 +21,15 @@ def get_template(template_id):
     """Get a specific template by ID"""
     template = Template.query.get_or_404(template_id)
     return jsonify(template.to_dict())
+
+@bp.route('/names', methods=['GET'])
+def get_template_names():
+    """Get only template names and IDs"""
+    templates = Template.query.all()
+    return jsonify({
+        'templates': [{'temp_id': template.temp_id, 'name': template.name} for template in templates],
+        'count': len(templates)
+    })
 
 @bp.route('/', methods=['POST'])
 def create_template():
@@ -100,6 +111,17 @@ def create_template_field(template_id):
     db.session.add(field)
     db.session.commit()
     
+    # Optionally auto-load Tally options for SELECT fields
+    try:
+        if field.field_type == FieldType.SELECT:
+            try:
+                auto_load_tally_options(field.field_id, clear_existing=True)
+            except TallyFieldOptionsError as e:
+                current_app.logger.warning(f"Auto-load Tally options failed for field {field.field_id}: {e}")
+    except Exception:
+        # Non-fatal: ensure API response is returned even if logging fails
+        pass
+
     return jsonify(field.to_dict()), 201
 
 @bp.route('/fields/<int:field_id>', methods=['GET'])
@@ -172,6 +194,16 @@ def create_sub_template_field(field_id):
     db.session.add(sub_field)
     db.session.commit()
     
+    # Optionally auto-load Tally options for SELECT sub-fields
+    try:
+        if sub_field.data_type == DataType.SELECT:
+            try:
+                auto_load_tally_sub_field_options(sub_field.sub_temp_field_id, clear_existing=True)
+            except TallyFieldOptionsError as e:
+                current_app.logger.warning(f"Auto-load Tally options failed for sub-field {sub_field.sub_temp_field_id}: {e}")
+    except Exception:
+        pass
+
     return jsonify(sub_field.to_dict()), 201
 
 @bp.route('/fields/<int:field_id>/options', methods=['GET'])
@@ -203,3 +235,47 @@ def create_field_option(field_id):
     db.session.commit()
     
     return jsonify(option.to_dict()), 201 
+
+# Sub-Template Field Option endpoints
+@bp.route('/sub-fields/<int:sub_field_id>/options', methods=['GET'])
+def get_sub_field_options(sub_field_id):
+    """Get options for a sub-template field"""
+    sub_field = SubTemplateField.query.get_or_404(sub_field_id)
+    options = sub_field.sub_field_options.all()
+    return jsonify({
+        'sub_field_options': [option.to_dict() for option in options],
+        'count': len(options)
+    })
+
+@bp.route('/sub-fields/<int:sub_field_id>/options', methods=['POST'])
+def create_sub_field_option(sub_field_id):
+    """Create a sub-template field option"""
+    sub_field = SubTemplateField.query.get_or_404(sub_field_id)
+    
+    # Validate that sub-field is SELECT type
+    if sub_field.data_type != DataType.SELECT:
+        return jsonify({'error': 'Sub-field must be of SELECT type to have options'}), 400
+    
+    data = request.get_json()
+    
+    if not data or not all(k in data for k in ('option_value', 'option_label')):
+        return jsonify({'error': 'Missing required fields'}), 400
+    
+    option = SubTemplateFieldOption(
+        sub_temp_field_id=sub_field_id,
+        option_value=data['option_value'],
+        option_label=data['option_label']
+    )
+    
+    db.session.add(option)
+    db.session.commit()
+    
+    return jsonify(option.to_dict()), 201
+
+@bp.route('/sub-fields/options/<int:option_id>', methods=['DELETE'])
+def delete_sub_field_option(option_id):
+    """Delete a sub-template field option"""
+    option = SubTemplateFieldOption.query.get_or_404(option_id)
+    db.session.delete(option)
+    db.session.commit()
+    return jsonify({'message': 'Sub-field option deleted successfully'})
