@@ -76,7 +76,13 @@ class TallySession(AbstractContextManager):
         * "legacy" – Uses the classic `TallyConnector.Services.TallyService`
         * "latest" – Uses `TallyConnector.Services.TallyPrime.V6.TallyPrimeService`
     host:
-        The Tally host URL.  Defaults to `http://localhost:9000`.
+        The Tally host URL. If not provided, will be resolved from api_key.
+        Defaults to `http://localhost:9000` if neither host nor api_key is provided.
+    api_key:
+        User's API key for dynamic host resolution. If provided, host will be
+        constructed as `http://{api_key}.holanitunnel.net`.
+    port:
+        Tally service port. Defaults to 80.
     """
 
     def __init__(
@@ -84,7 +90,9 @@ class TallySession(AbstractContextManager):
         lib_dir: str | Path = None,
         *,
         version: str = "legacy",
-        host: str = "http://localhost:9000",
+        host: str = None,
+        api_key: str = None,
+        port: int = None,
     ) -> None:
         if not CLR_AVAILABLE:
             raise RuntimeError("CLR/pythonnet not available. Install pythonnet package.")
@@ -95,13 +103,22 @@ class TallySession(AbstractContextManager):
         if lib_dir is None:
             lib_dir = TallyConfig.get_lib_dir(version)
             
+        # Use config to get port if not provided
+        if port is None:
+            port = TallyConfig.DEFAULT_PORT
+            
+        # Resolve host dynamically from API key or use provided host
+        resolved_host = self._resolve_host(host, api_key)
+            
         if version == "latest":
             _add_assembly_reference(lib_dir, "TallyConnectorNew")
         else:
             _add_assembly_reference(lib_dir, "TallyConnector")
         
         self.version = version.lower()
-        self.host = host
+        self.host = resolved_host
+        self.api_key = api_key
+        self.port = port
         self.lib_dir = lib_dir
         
         # Version-specific imports after CLR reference is added
@@ -655,6 +672,9 @@ class TallySession(AbstractContextManager):
             "version": self.version,
             "lib_dir": str(self.lib_dir),
             "host": self.host,
+            "port": self.port,
+            "api_key": self.api_key[:8] + "..." if self.api_key else None,  # Only show first 8 chars for security
+            "host_source": "api_key" if self.api_key else "explicit" if self.host != TallyConfig.DEFAULT_HOST else "default",
             "request_options_available": self.request_options is not None,
             "master_request_options_available": self.master_request_options is not None,
             "post_request_options_available": self.post_request_options is not None,
@@ -685,20 +705,94 @@ class TallySession(AbstractContextManager):
 
     # ------------------------------------------------------------------- internals
 
+    def _resolve_host(self, host: str = None, api_key: str = None) -> str:
+        """
+        Resolve the appropriate host URL based on provided parameters.
+        
+        Parameters
+        ----------
+        host : str, optional
+            Explicitly provided host URL
+        api_key : str, optional
+            User's API key for dynamic host resolution
+            
+        Returns
+        -------
+        str
+            Resolved host URL
+            
+        Raises
+        ------
+        ValueError
+            If neither host nor api_key is provided and fallback is disabled
+        """
+        # If host is explicitly provided, use it
+        if host:
+            logger.info("Using explicitly provided host: %s", host)
+            return host
+        
+        # If api_key is provided, resolve host from it
+        if api_key:
+            try:
+                resolved_host = TallyConfig.resolve_host_from_api_key(api_key)
+                logger.info("Resolved host from API key: %s", resolved_host)
+                return resolved_host
+            except ValueError as e:
+                logger.warning("Failed to resolve host from API key: %s", e)
+                # If fallback is enabled, TallyConfig.resolve_host_from_api_key will return default
+                # If not, it will raise the exception which we re-raise here
+                raise
+        
+        # Neither host nor api_key provided - use default
+        logger.info("No host or API key provided, using default host: %s", TallyConfig.DEFAULT_HOST)
+        return TallyConfig.DEFAULT_HOST
+
     def _create_service(self):
         """Create the appropriate TallyService based on version."""
         if self.version == "legacy":
             from TallyConnector.Services import TallyService
-            return TallyService()
+            tally = TallyService()
+            tally.Setup(self.host, self.port)
+            return tally
         elif self.version == "latest":
             from TallyConnectorNew.Services.TallyPrime.V6 import (  # type: ignore
                 TallyPrimeService,
             )
-            return TallyPrimeService()
+            tally = TallyPrimeService()
+            tally.SetupTallyService(self.host, self.port) 
+            return tally
         else:
             raise ValueError(
                 "version must be 'legacy', 'latest' – got %r" % self.version
             )
+
+
+    @classmethod
+    def from_user(cls, user, **kwargs):
+        """
+        Create a TallySession instance from a User object.
+        
+        Parameters
+        ----------
+        user : User
+            User model instance with api_key attribute
+        **kwargs
+            Additional parameters to pass to TallySession constructor
+            
+        Returns
+        -------
+        TallySession
+            Configured TallySession instance
+            
+        Raises
+        ------
+        AttributeError
+            If user object doesn't have api_key attribute
+        """
+        if not hasattr(user, 'api_key'):
+            raise AttributeError("User object must have an 'api_key' attribute")
+        
+        return cls(api_key=user.api_key, **kwargs)
 
 
 __all__ = ["TallySession"]

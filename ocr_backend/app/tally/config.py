@@ -14,7 +14,16 @@ class TallyConfig:
     
     # Tally Connection Settings
     DEFAULT_VERSION = "legacy"  # or "latest"
-    DEFAULT_HOST = "http://localhost:9000"
+    DEV_HOST = "http://localhost:9000"
+    DEFAULT_HOST = DEV_HOST
+    DEFAULT_PORT = 80
+    
+    # Tunnel Configuration
+    TUNNEL_DOMAIN = "holanitunnel.net"  # Configurable tunnel domain
+    TUNNEL_PROTOCOL = "http"  # Can be http or https
+    
+    # Fallback settings
+    ENABLE_FALLBACK_TO_DEFAULT = True  # Whether to fallback to DEFAULT_HOST if API key resolution fails
     
     # Alternative library directories for different versions
     # _PARENT = Path(__file__).parent
@@ -75,3 +84,49 @@ class TallyConfig:
             return cls.DEFAULT_SUPPLIER_GROUP
         else:
             return cls.DEFAULT_LEDGER_GROUP
+    
+    @classmethod
+    def resolve_host_from_api_key(cls, api_key: str = None) -> str:
+        """
+        Resolve Tally host URL from API key.
+        
+        Parameters
+        ----------
+        api_key : str, optional
+            User's API key to resolve host from
+            
+        Returns
+        -------
+        str
+            Resolved host URL
+            
+        Raises
+        ------
+        ValueError
+            If api_key is invalid and fallback is disabled
+        """
+        if not api_key:
+            if cls.ENABLE_FALLBACK_TO_DEFAULT:
+                return cls.DEFAULT_HOST
+            else:
+                raise ValueError("API key is required and no fallback is enabled")
+        
+        # Validate API key format (should be 32 character hex string)
+        if not isinstance(api_key, str) or len(api_key) != 32:
+            if cls.ENABLE_FALLBACK_TO_DEFAULT:
+                return cls.DEFAULT_HOST
+            else:
+                raise ValueError(f"Invalid API key format: expected 32-character hex string, got {len(api_key) if api_key else 0} characters")
+        
+        # Check if it's a valid hex string
+        try:
+            int(api_key, 16)
+        except ValueError:
+            if cls.ENABLE_FALLBACK_TO_DEFAULT:
+                return cls.DEFAULT_HOST
+            else:
+                raise ValueError("Invalid API key format: not a valid hexadecimal string")
+        
+        # Construct tunnel URL
+        tunnel_host = f"{cls.TUNNEL_PROTOCOL}://{api_key}.{cls.TUNNEL_DOMAIN}"
+        return tunnel_host
