@@ -12,18 +12,20 @@ load_dotenv()
 class TallyConfig:
     """Configuration class for Tally connector settings."""
     
+    # Development Mode - Simple toggle
+    DEV_MODE = os.environ.get("TALLY_DEV_MODE", "true").lower() == "true"
+    
     # Tally Connection Settings
     DEFAULT_VERSION = "legacy"  # or "latest"
-    DEV_HOST = "http://localhost:9000"
+    DEV_HOST = "http://localhost"
+    DEV_PORT = 9000
+    HTTP_PORT = 80
     DEFAULT_HOST = DEV_HOST
-    DEFAULT_PORT = 80
+    DEFAULT_PORT = DEV_PORT
     
     # Tunnel Configuration
     TUNNEL_DOMAIN = "holanitunnel.net"  # Configurable tunnel domain
     TUNNEL_PROTOCOL = "http"  # Can be http or https
-    
-    # Fallback settings
-    ENABLE_FALLBACK_TO_DEFAULT = True  # Whether to fallback to DEFAULT_HOST if API key resolution fails
     
     # Alternative library directories for different versions
     # _PARENT = Path(__file__).parent
@@ -86,47 +88,78 @@ class TallyConfig:
             return cls.DEFAULT_LEDGER_GROUP
     
     @classmethod
-    def resolve_host_from_api_key(cls, api_key: str = None) -> str:
+    def get_host_and_port(cls, api_key: str = None) -> tuple[str, int]:
         """
-        Resolve Tally host URL from API key.
+        Smart host/port resolution based on dev mode and user context.
         
         Parameters
         ----------
         api_key : str, optional
-            User's API key to resolve host from
+            User's API key (if not provided, tries to auto-detect from context)
             
         Returns
         -------
-        str
-            Resolved host URL
+        tuple[str, int]
+            (host, port)
             
         Raises
         ------
         ValueError
-            If api_key is invalid and fallback is disabled
+            If api_key is required but not available
         """
-        if not api_key:
-            if cls.ENABLE_FALLBACK_TO_DEFAULT:
-                return cls.DEFAULT_HOST
-            else:
-                raise ValueError("API key is required and no fallback is enabled")
+        breakpoint()
+        if cls.DEV_MODE:
+            return cls.DEV_HOST, cls.DEV_PORT
+        else:
+            # Try to get api_key from parameter, then try auto-detection
+            effective_api_key = api_key or cls._try_get_user_api_key()
+            
+            if not effective_api_key:
+                raise ValueError("API key is required when not in dev mode. Either provide api_key parameter or ensure user context is available.")
+            
+            host = f"{cls.TUNNEL_PROTOCOL}://{effective_api_key}.{cls.TUNNEL_DOMAIN}"
+            return host, cls.HTTP_PORT
+
+    @classmethod
+    def _try_get_user_api_key(cls) -> str | None:
+        """
+        Try to automatically get API key from various sources.
         
-        # Validate API key format (should be 32 character hex string)
-        if not isinstance(api_key, str) or len(api_key) != 32:
-            if cls.ENABLE_FALLBACK_TO_DEFAULT:
-                return cls.DEFAULT_HOST
-            else:
-                raise ValueError(f"Invalid API key format: expected 32-character hex string, got {len(api_key) if api_key else 0} characters")
-        
-        # Check if it's a valid hex string
+        Returns
+        -------
+        str | None
+            API key if found, None otherwise
+        """
         try:
-            int(api_key, 16)
-        except ValueError:
-            if cls.ENABLE_FALLBACK_TO_DEFAULT:
-                return cls.DEFAULT_HOST
-            else:
-                raise ValueError("Invalid API key format: not a valid hexadecimal string")
+            # Try Flask application context
+            from flask import has_app_context, g, request, session
+            
+            if has_app_context():
+                # Option 1: Check Flask g object
+                if hasattr(g, 'user') and hasattr(g.user, 'api_key'):
+                    return g.user.api_key
+                
+                # Option 2: Check Flask g for api_key directly
+                if hasattr(g, 'api_key'):
+                    return g.api_key
+                    
+                # Option 3: Check request headers (common pattern)
+                if request and 'X-API-Key' in request.headers:
+                    return request.headers['X-API-Key']
+                    
+                # Option 4: Check session
+                if session and 'api_key' in session:
+                    return session['api_key']
+                    
+                # Option 5: Check session user
+                if session and 'user' in session:
+                    user_data = session['user']
+                    if isinstance(user_data, dict) and 'api_key' in user_data:
+                        return user_data['api_key']
         
-        # Construct tunnel URL
-        tunnel_host = f"{cls.TUNNEL_PROTOCOL}://{api_key}.{cls.TUNNEL_DOMAIN}"
-        return tunnel_host
+        except (ImportError, RuntimeError):
+            # Not in Flask context or Flask not available
+            pass
+        
+        # Try environment variable as fallback
+        return os.environ.get("TALLY_API_KEY")

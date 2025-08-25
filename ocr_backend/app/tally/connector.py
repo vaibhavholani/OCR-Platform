@@ -36,7 +36,9 @@ class TallyConnector:
         self, 
         lib_dir: Optional[str] = None,
         version: str = TallyConfig.DEFAULT_VERSION,
-        host: str = TallyConfig.DEFAULT_HOST
+        host: str = None,
+        port: int = None,
+        api_key: str = None
     ):
         """
         Initialize Tally connector.
@@ -44,7 +46,9 @@ class TallyConnector:
         Args:
             lib_dir: Path to TallyConnector library directory
             version: TallyConnector version ("legacy" or "latest")
-            host: Tally host URL
+            host: Tally host URL (optional, resolved from config if not provided)
+            port: Tally port (optional, resolved from config if not provided)
+            api_key: User's API key (used for host resolution when not in dev mode)
         """
         if TallySession is None:
             raise TallyConnectorError(
@@ -53,11 +57,20 @@ class TallyConnector:
         
         self.lib_dir = lib_dir or TallyConfig.get_lib_dir(version)
         self.version = version
-        self.host = host
+        self.api_key = api_key
+        
+        # Resolve host and port using the simple config system
+        if host is not None and port is not None:
+            # Use explicitly provided host and port
+            self.host, self.port = host, port
+        else:
+            # Use config-based resolution
+            self.host, self.port = TallyConfig.get_host_and_port(api_key)
+        
         self._session = None
         self._is_connected = False
         
-        logger.info(f"Initializing TallyConnector with version={version}, host={host}")
+        logger.info(f"Initializing TallyConnector with version={version}, host={self.host}, dev_mode={TallyConfig.DEV_MODE}")
     
     def __enter__(self):
         """Context manager entry."""
@@ -75,7 +88,9 @@ class TallyConnector:
             self._session = TallySession(
                 lib_dir=self.lib_dir,
                 version=self.version,
-                host=self.host
+                host=self.host,
+                port=self.port,
+                api_key=self.api_key
             )
             self._session.__enter__()
             self._is_connected = True
