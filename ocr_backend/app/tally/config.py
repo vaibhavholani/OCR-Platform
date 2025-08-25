@@ -107,7 +107,7 @@ class TallyConfig:
         ValueError
             If api_key is required but not available
         """
-        breakpoint()
+        
         if cls.DEV_MODE:
             return cls.DEV_HOST, cls.DEV_PORT
         else:
