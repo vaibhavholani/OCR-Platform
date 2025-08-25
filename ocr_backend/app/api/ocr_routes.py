@@ -515,36 +515,7 @@ def process_document_internal(doc_id, template_id):
             db.session.commit()
             return {'success': False, 'message': 'No fields defined for this template'}
 
-        # 5.5. Refresh auto ledger pull for all SELECT fields
-        print("Refreshing Tally ledger options for SELECT fields...")
-        select_fields = [f for f in template_fields if f.field_type == FieldType.SELECT]
-        for select_field in select_fields:
-            try:
-                refresh_result = refresh_field_options(select_field.field_id)
-                print(f"Refreshed {refresh_result.get('options_count', 0)} options for field '{select_field.field_name.value}'")
-            except TallyFieldOptionsError as e:
-                print(f"Warning: Failed to refresh options for field '{select_field.field_name.value}': {e}")
-                # Continue processing even if refresh fails
-            except Exception as e:
-                print(f"Warning: Unexpected error refreshing field '{select_field.field_name.value}': {e}")
-                # Continue processing even if refresh fails
-        
-        # Also refresh SELECT sub-fields in table fields
-        table_fields_for_refresh = [f for f in template_fields if f.field_type == FieldType.TABLE]
-        for table_field in table_fields_for_refresh:
-            sub_fields = SubTemplateField.query.filter_by(field_id=table_field.field_id).all()
-            select_sub_fields = [sf for sf in sub_fields if sf.data_type == DataType.SELECT]
-            for select_sub_field in select_sub_fields:
-                try:
-                    # Use the sub-field auto-load function
-                    refresh_result = auto_load_tally_sub_field_options(select_sub_field.sub_temp_field_id)
-                    print(f"Refreshed {refresh_result.get('options_count', 0)} options for sub-field '{select_sub_field.field_name.value}'")
-                except TallyFieldOptionsError as e:
-                    print(f"Warning: Failed to refresh options for sub-field '{select_sub_field.field_name.value}': {e}")
-                    # Continue processing even if refresh fails
-                except Exception as e:
-                    print(f"Warning: Unexpected error refreshing sub-field '{select_sub_field.field_name.value}': {e}")
-                    # Continue processing even if refresh fails
+
 
         # 6. Process different field types
         extracted_data = {}
