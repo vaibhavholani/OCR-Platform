@@ -3,7 +3,7 @@ from flask import current_app
 from .. import db
 from ..models import Template, TemplateField, SubTemplateField, FieldOption, SubTemplateFieldOption
 from ..utils.enums import FieldType, FieldName, DataType
-from ..tally import auto_load_tally_options, auto_load_tally_sub_field_options, TallyFieldOptionsError
+from ..tally import auto_load_tally_options, auto_load_tally_sub_field_options, TallyFieldOptionsError, refresh_field_options
 
 bp = Blueprint('templates', __name__, url_prefix='/api/templates')
 
@@ -19,6 +19,36 @@ def get_templates():
 @bp.route('/<int:template_id>', methods=['GET'])
 def get_template(template_id):
     """Get a specific template by ID"""
+
+    template_fields = TemplateField.query.filter_by(template_id=template_id).all()
+
+    select_fields = [f for f in template_fields if f.field_type == FieldType.SELECT]
+    for select_field in select_fields:
+        try:
+            refresh_result = refresh_field_options(select_field.field_id)
+            print(f"Refreshed {refresh_result.get('options_count', 0)} options for field '{select_field.field_name.value}'")
+        except TallyFieldOptionsError as e:
+            print(f"Warning: Failed to refresh options for field '{select_field.field_name.value}': {e}")
+            # Continue processing even if refresh fails
+        except Exception as e:
+            print(f"Warning: Unexpected error refreshing field '{select_field.field_name.value}': {e}")
+            # Continue processing even if refresh fails
+    
+    # Also refresh SELECT sub-fields in table fields
+    table_fields_for_refresh = [f for f in template_fields if f.field_type == FieldType.TABLE]
+    for table_field in table_fields_for_refresh:
+        sub_fields = SubTemplateField.query.filter_by(field_id=table_field.field_id).all()
+        select_sub_fields = [sf for sf in sub_fields if sf.data_type == DataType.SELECT]
+        for select_sub_field in select_sub_fields:
+            try:
+                # Use the sub-field auto-load function
+                refresh_result = auto_load_tally_sub_field_options(select_sub_field.sub_temp_field_id)
+                print(f"Refreshed {refresh_result.get('options_count', 0)} options for sub-field '{select_sub_field.field_name.value}'")
+            except TallyFieldOptionsError as e:
+                print(f"Warning: Failed to refresh options for sub-field '{select_sub_field.field_name.value}': {e}")
+            except Exception as e:
+                print(f"Warning: Unexpected error refreshing sub-field '{select_sub_field.field_name.value}': {e}")
+
     template = Template.query.get_or_404(template_id)
     return jsonify(template.to_dict())
 
