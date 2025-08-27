@@ -45,7 +45,7 @@ def get_document_ocr_data(document_id):
     # Format extracted data (text fields)
     extracted_data = {}
     for ocr, field in ocr_data:
-        extracted_data[field.field_name.value] = ocr.predicted_value or ocr.actual_value
+        extracted_data[field.field_name.value] = ocr.actual_value or ocr.predicted_value
     
     # Get formatted table data
     table_data = reconstruct_table_data_from_db(document_id)
@@ -90,7 +90,7 @@ def reconstruct_table_data_from_db(document_id):
             row_data = {}
             for value in line_item.ocr_line_item_values:
                 if value.sub_template_field:
-                    row_data[value.sub_template_field.field_name.value] = value.predicted_value or value.actual_value
+                    row_data[value.sub_template_field.field_name.value] = value.actual_value or value.predicted_value
             rows.append(row_data)
         
         # Format columns info
@@ -187,7 +187,6 @@ def convert_ocr_to_tally_format(ocr_data):
         
         # TODO: WARNING: This is a temporary fix to remove duplicates from line_items TILL THE FROTNEND IS FIXED.
         # Remove duplicates from line_items (it's a list of dictionaries)
-        line_items = [dict(t) for t in {tuple(sorted(d.items())) for d in line_items}]
 
         total_amount = sum(item['amount'] for item in line_items)
 
