@@ -11,12 +11,15 @@ class User(db.Model):
     email = db.Column(db.String(120), unique=True, nullable=False)
     password_hash = db.Column(db.String(255), nullable=False)
     api_key = db.Column(db.String(32), unique=True, nullable=False, default=lambda: secrets.token_hex(16))
+    credits_remaining = db.Column(db.Integer, default=10, nullable=False)
+    plan_type = db.Column(db.String(20), default='free', nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
     # Relationships
     documents = db.relationship('Document', backref='user', lazy='dynamic', cascade='all, delete-orphan')
     templates = db.relationship('Template', backref='user', lazy='dynamic', cascade='all, delete-orphan')
+    credit_transactions = db.relationship('CreditTransaction', backref='user', lazy='dynamic', cascade='all, delete-orphan')
     
     def set_password(self, password):
         self.password_hash = generate_password_hash(password)
@@ -33,7 +36,9 @@ class User(db.Model):
             'api_key': self.api_key,
             'password': getattr(self, '_plain_password', None) or self.password_hash,  # For demo only
             'created_at': self.created_at.isoformat() if self.created_at else None,
-            'updated_at': self.updated_at.isoformat() if self.updated_at else None
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+            'credits_remaining': self.credits_remaining,
+            'plan_type': self.plan_type
         }
     
     def __repr__(self):

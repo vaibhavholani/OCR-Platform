@@ -10,6 +10,7 @@ from .ocr_line_item import OCRLineItem
 from .ocr_line_item_value import OCRLineItemValue
 from .export import Export
 from .export_file import ExportFile
+from .credit_transaction import CreditTransaction
 
 __all__ = [
     'User',
@@ -23,5 +24,6 @@ __all__ = [
     'OCRLineItem',
     'OCRLineItemValue',
     'Export',
-    'ExportFile'
+    'ExportFile',
+    'CreditTransaction'
 ] 
