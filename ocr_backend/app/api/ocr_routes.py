@@ -1,6 +1,7 @@
 from flask import Blueprint, jsonify, request, current_app
 from .. import db
 from ..models import OCRData, OCRLineItem, OCRLineItemValue, Document, TemplateField, SubTemplateField, Template, FieldOption, SubTemplateFieldOption
+from ..services.ocr_service import OCRService
 from ..utils.gemini_ocr import call_gemini_ocr, parse_gemini_response
 from ..utils.enums import DocumentStatus, FieldType, DataType
 from ..utils.data_conversion import (
@@ -740,8 +741,8 @@ def process_document_internal(doc_id, template_id):
 @bp.route('/process_document', methods=['POST'])
 def process_document():
     """
-    Integrated OCR processing endpoint that handles the full pipeline:
-    document → template → OCR → database storage
+    Integrated OCR processing endpoint with credit management:
+    credit check → document → template → OCR → database storage → credit deduction
     """
     data = request.get_json()
     doc_id = data.get('doc_id')
@@ -749,13 +750,45 @@ def process_document():
 
     if not doc_id or not template_id:
         return jsonify({'error': 'Missing required fields: doc_id and template_id'}), 400
+    
     print(f"Processing document {doc_id} with template {template_id}")
+    
+    # 1. Check credits before processing
+    credit_check_success, credit_message, credit_info = OCRService.check_credits_before_processing(doc_id)
+    if not credit_check_success:
+        current_app.logger.warning(f"Credit check failed for document {doc_id}: {credit_message}")
+        return jsonify({
+            'success': False,
+            'error': 'Insufficient credits for OCR processing',
+            'message': credit_message,
+            'credit_info': credit_info
+        }), 402  # Payment Required status code
+    
+    # 2. Process the document
     result = process_document_internal(doc_id, template_id)
     
     if result['success']:
+        # 3. Deduct credits only on successful processing
+        credit_deduct_success, deduct_message, transaction_info = OCRService.deduct_credits_for_processing(doc_id)
+        
+        if credit_deduct_success:
+            # Add credit transaction info to the response
+            result['credit_transaction'] = transaction_info
+            result['message'] = f"{result['message']} - {deduct_message}"
+            current_app.logger.info(f"Credits deducted successfully for document {doc_id}")
+        else:
+            # If credit deduction fails, log but don't fail the entire operation
+            current_app.logger.error(f"Failed to deduct credits for document {doc_id}: {deduct_message}")
+            result['credit_warning'] = f"OCR completed but credit deduction failed: {deduct_message}"
+        
         return jsonify(result), 200
     else:
-        return jsonify({'error': result['message']}), 500 
+        # 4. No credit deduction for failed processing
+        current_app.logger.info(f"OCR processing failed for document {doc_id}, no credits deducted")
+        return jsonify({
+            'success': False,
+            'error': result['message']
+        }), 500 
 
 @bp.route('/field/<int:field_id>/load_tally_options', methods=['POST'])
 def load_field_tally_options(field_id):
