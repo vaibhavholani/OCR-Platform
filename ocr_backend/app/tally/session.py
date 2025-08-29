@@ -102,14 +102,13 @@ class TallySession(AbstractContextManager):
         # Use config to get lib_dir if not provided
         if lib_dir is None:
             lib_dir = TallyConfig.get_lib_dir(version)
-        
-        # Simple host/port resolution
-        if host is not None and port is not None:
-            # If both host and port are explicitly provided, use them
-            resolved_host, resolved_port = host, port
-        else:
-            # Use config-based resolution
-            resolved_host, resolved_port = TallyConfig.get_host_and_port(api_key)
+            
+        # Use config to get port if not provided
+        if port is None:
+            port = TallyConfig.DEFAULT_PORT
+            
+        # Resolve host dynamically from API key or use provided host
+        resolved_host = self._resolve_host(host, api_key)
             
         if version == "latest":
             _add_assembly_reference(lib_dir, "TallyConnectorNew")
@@ -119,7 +118,7 @@ class TallySession(AbstractContextManager):
         self.version = version.lower()
         self.host = resolved_host
         self.api_key = api_key
-        self.port = resolved_port
+        self.port = port
         self.lib_dir = lib_dir
         
         # Version-specific imports after CLR reference is added
@@ -377,6 +376,7 @@ class TallySession(AbstractContextManager):
         ledger.Name = name
         ledger.OldName = alias or name
         ledger.Group = group
+        ledger.Address = "wow"
 
         # apply extra fields via **kwargs (e.g. Email)
         for k, v in kwargs.items():
@@ -384,7 +384,6 @@ class TallySession(AbstractContextManager):
                 setattr(ledger, k, v)
             else:
                 logger.warning("Unknown Ledger attribute: %s", k)
-
         resp = self._svc.PostLedgerAsync(ledger).Result
         return resp.Response if hasattr(resp, "Response") else resp
 
@@ -533,6 +532,7 @@ class TallySession(AbstractContextManager):
             return response
         else:
             return voucher
+        
 
     def create_stock_item(
         self,
@@ -706,7 +706,47 @@ class TallySession(AbstractContextManager):
 
     # ------------------------------------------------------------------- internals
 
-
+    def _resolve_host(self, host: str = None, api_key: str = None) -> str:
+        """
+        Resolve the appropriate host URL based on provided parameters.
+        
+        Parameters
+        ----------
+        host : str, optional
+            Explicitly provided host URL
+        api_key : str, optional
+            User's API key for dynamic host resolution
+            
+        Returns
+        -------
+        str
+            Resolved host URL
+            
+        Raises
+        ------
+        ValueError
+            If neither host nor api_key is provided and fallback is disabled
+        """
+        # If host is explicitly provided, use it
+        if host:
+            logger.info("Using explicitly provided host: %s", host)
+            return host
+        
+        # If api_key is provided, resolve host from it
+        if api_key:
+            try:
+                resolved_host = TallyConfig.resolve_host_from_api_key(api_key)
+                logger.info("Resolved host from API key: %s", resolved_host)
+                return resolved_host
+            except ValueError as e:
+                logger.warning("Failed to resolve host from API key: %s", e)
+                # If fallback is enabled, TallyConfig.resolve_host_from_api_key will return default
+                # If not, it will raise the exception which we re-raise here
+                raise
+        
+        # Neither host nor api_key provided - use default
+        logger.info("No host or API key provided, using default host: %s", TallyConfig.DEFAULT_HOST)
+        return TallyConfig.DEFAULT_HOST
 
     def _create_service(self):
         """Create the appropriate TallyService based on version."""

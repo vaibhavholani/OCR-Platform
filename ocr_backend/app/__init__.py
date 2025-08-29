@@ -23,7 +23,7 @@ def create_app(config_class=Config):
     CORS(app)
     
     # Register blueprints
-    from .api import user_routes, document_routes, export_routes, template_routes, ocr_routes, enum_routes, tally_routes
+    from .api import user_routes, document_routes, export_routes, template_routes, ocr_routes, enum_routes, tally_routes, credit_routes
     app.register_blueprint(user_routes.bp)
     app.register_blueprint(document_routes.bp)
     app.register_blueprint(export_routes.bp)
@@ -31,46 +31,45 @@ def create_app(config_class=Config):
     app.register_blueprint(ocr_routes.bp)
     app.register_blueprint(enum_routes.bp)
     app.register_blueprint(tally_routes.bp)
+    app.register_blueprint(credit_routes.credit_bp)
     
-    # Create database tables on first request
+    # Create database tables and handle migrations on first request
     with app.app_context():
         db.create_all()
-        # Ensure users.api_key column exists and is populated
+        # Auto-migrate credit system fields
         try:
             inspector = inspect(db.engine)
             if inspector.has_table('users'):
                 columns = {col['name'] for col in inspector.get_columns('users')}
-                if 'api_key' not in columns:
-                    # Add api_key column
-                    db.session.execute(text('ALTER TABLE users ADD COLUMN api_key VARCHAR(32)'))
-                    db.session.commit()
-
-                # Backfill api_key values for existing users where NULL or empty
+                
+                # Add credit system fields if they don't exist
+                if 'credits_remaining' not in columns:
+                    db.session.execute(text('ALTER TABLE users ADD COLUMN credits_remaining INTEGER DEFAULT 10 NOT NULL'))
+                    app.logger.info("Added credits_remaining column to users table")
+                
+                if 'plan_type' not in columns:
+                    db.session.execute(text('ALTER TABLE users ADD COLUMN plan_type VARCHAR(20) DEFAULT "free" NOT NULL'))
+                    app.logger.info("Added plan_type column to users table")
+                
+                db.session.commit()
+                
+                # Initialize credit values for existing users without credits
                 from .models import User
-                existing_keys = set(
-                    k for (k,) in db.session.execute(text('SELECT api_key FROM users WHERE api_key IS NOT NULL'))
-                )
-                users_without_key = User.query.filter((User.api_key == None) | (User.api_key == '')).all()  # noqa: E711
-                for user in users_without_key:
-                    new_key = secrets.token_hex(16)
-                    while new_key in existing_keys:
-                        new_key = secrets.token_hex(16)
-                    user.api_key = new_key
-                    existing_keys.add(new_key)
-                if users_without_key:
+                users_without_credits = User.query.filter(
+                    (User.credits_remaining == None) | (User.credits_remaining < 0)
+                ).all()
+                
+                for user in users_without_credits:
+                    user.credits_remaining = 10  # Default free credits
+                    user.plan_type = 'free'
+                
+                if users_without_credits:
                     db.session.commit()
-
-                # Ensure a unique index on api_key exists (SQLite compatible)
-                existing_indexes = {idx['name'] for idx in inspector.get_indexes('users')}
-                desired_index_name = 'ux_users_api_key'
-                if desired_index_name not in existing_indexes:
-                    try:
-                        db.session.execute(text('CREATE UNIQUE INDEX ux_users_api_key ON users (api_key)'))
-                        db.session.commit()
-                    except Exception:
-                        db.session.rollback()
-        except Exception:
-            # Avoid crashing the app if introspection/DDL fails; continue startup
+                    app.logger.info(f"Initialized credits for {len(users_without_credits)} existing users")
+                    
+        except Exception as e:
+            # Avoid crashing the app if migration fails; continue startup
+            app.logger.error(f"Error during credit system migration: {e}")
             db.session.rollback()
     
     return app 
